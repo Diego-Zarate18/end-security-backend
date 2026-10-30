@@ -1,0 +1,196 @@
+{
+  "info": {
+    "_postman_id": "a91e532b-67df-485a-93f9-7157a5eb23b0",
+    "name": "End Security - Backend API",
+    "description": "Colección de pruebas para el backend de End Security (Zero-Knowledge Password Manager)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "health"]
+        },
+        "description": "Comprueba el estado de la API y la conectividad con PostgreSQL."
+      },
+      "response": []
+    },
+    {
+      "name": "1. Auth - Registro Exitoso",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 201) {",
+              "    const res = pm.response.json();",
+              "    if (res.data && res.data.accessToken) {",
+              "        pm.collectionVariables.set('token', res.data.accessToken);",
+              "        console.log('Token guardado automáticamente en {{token}}');",
+              "    }",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"diego@endsecurity.com\",\n  \"passwordHash\": \"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/register",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "register"]
+        },
+        "description": "Registra un usuario y guarda automáticamente el JWT retornado en la variable {{token}}."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Auth - Login Exitoso",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    const res = pm.response.json();",
+              "    if (res.data && res.data.accessToken) {",
+              "        pm.collectionVariables.set('token', res.data.accessToken);",
+              "        console.log('Token actualizado en {{token}}');",
+              "    }",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"diego@endsecurity.com\",\n  \"passwordHash\": \"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        },
+        "description": "Inicia sesión con credenciales válidas y actualiza el token JWT en la variable {{token}}."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Auth - Login Fallido (Credenciales Incorrectas)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"diego@endsecurity.com\",\n  \"passwordHash\": \"hash_totalmente_incorrecto_123456789\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "login"]
+        },
+        "description": "Prueba de seguridad: Debe responder 401 Unauthorized sin revelar si falló el correo o la contraseña."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Users - Perfil de Usuario (/users/me - Con Token)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/users/me",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "users", "me"]
+        },
+        "description": "Ruta protegida por JwtAuthGuard. Debe responder 200 OK con los datos del usuario logueado."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Users - Perfil Sin Token (Debe fallar 401)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/users/me",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "users", "me"]
+        },
+        "description": "Prueba de seguridad: Intento de acceso sin Bearer token. Debe responder 401 Unauthorized."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Seguridad - DTO con Parámetro Extra (Mass Assignment Test)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"otro@endsecurity.com\",\n  \"passwordHash\": \"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\",\n  \"isAdmin\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/register",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "register"]
+        },
+        "description": "Prueba de sanitización: Se envía un campo no permitido ('isAdmin'). Debe responder 400 Bad Request gracias a forbidNonWhitelisted: true."
+      },
+      "response": []
+    }
+  ]
+}
+
