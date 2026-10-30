@@ -40,28 +40,65 @@
 
 ## 4. Estructura del Repositorio del Backend (NestJS)
 
-Se maneja una estrategia **Multi-repo** (`end-security-android` y `end-security-backend`).
+Se maneja una estrategia **Multi-repo** (`end-security-android` y `end-security-backend`). A continuación se describe la arquitectura modular del backend:
 
 ```text
-src/
-├── common/                   # DTOs globales, interceptores, guards (JWT, Throttler), decoradores
-│   ├── decorators/
-│   ├── filters/              # HttpExceptionFilter
-│   ├── guards/               # JwtAuthGuard, RateLimitGuard
-│   └── interceptors/         # LoggingInterceptor, AuditInterceptor
-├── config/                   # Validación de variables de entorno
-├── database/                 # PrismaService y PrismaModule
-├── modules/                  # Módulos de dominio
-│   ├── auth/                 # Registro, Login (Hash derivado), Refresh Token, TOTP 2FA
-│   ├── users/                # Perfil y borrado de cuenta
-│   ├── vault/                # Almacenamiento y sincronización de Bóveda Cifrada (GET/PUT)
-│   └── audit-log/            # Registro de actividades e historial de logins
-├── prisma/                   # schema.prisma y migraciones
-├── app.module.ts
-└── main.ts
+end-security-backend/
+├── prisma/
+│   └── schema.prisma               # Modelado relacional (User, Vault, AuditLog)
+├── src/
+│   ├── common/                     # Componentes transversales y utilidades de seguridad
+│   │   ├── decorators/             # @CurrentUser, @ClientInfo (IP/User-Agent), @Public
+│   │   ├── dto/                    # DTOs globales (paginación, respuestas base)
+│   │   ├── filters/                # Filtros de excepción globales (HttpExceptionFilter, PrismaExceptionFilter)
+│   │   ├── guards/                 # Guards de seguridad y control de acceso (JwtAuthGuard, ThrottlerGuard)
+│   │   ├── interceptors/           # Interceptors (Logging seguro, Transformación de respuestas)
+│   │   └── middleware/             # Middlewares (Sanitización, Rate-limit, Client IP parser)
+│   ├── config/                     # Configuración centralizada y validación de variables de entorno
+│   │   ├── env.validation.ts       # Esquema estricto de variables (.env)
+│   │   └── jwt.config.ts           # Configuración de expiración y secretos JWT
+│   ├── database/                   # Capa de persistencia
+│   │   ├── prisma.module.ts        # Módulo global exportable de Prisma
+│   │   └── prisma.service.ts       # Servicio que gestiona el ciclo de vida de la conexión a PostgreSQL
+│   ├── modules/                    # Módulos de dominio de la aplicación
+│   │   ├── auth/                   # Autenticación, sesiones y emisión de tokens
+│   │   │   ├── controllers/        # Endpoints /api/auth (register, login, refresh)
+│   │   │   ├── services/           # Lógica de validación de credenciales con Argon2 y JWT
+│   │   │   ├── strategies/         # Estrategias Passport (JwtStrategy)
+│   │   │   ├── guards/             # Guards específicos de Auth
+│   │   │   ├── dto/                # RegisterDto, LoginDto, TokenRefreshDto
+│   │   │   └── auth.module.ts
+│   │   ├── two-factor/             # Verificación en Dos Pasos (TOTP)
+│   │   │   ├── controllers/        # Endpoints /api/auth/2fa (generate, enable, verify, disable)
+│   │   │   ├── services/           # Gestión de secretos TOTP (otplib) y QR (qrcode)
+│   │   │   ├── guards/             # TwoFactorGuard para operaciones sensibles
+│   │   │   ├── dto/                # Verify2FaDto, Enable2FaDto
+│   │   │   └── two-factor.module.ts
+│   │   ├── users/                  # Gestión de perfil y cuenta de usuario
+│   │   │   ├── controllers/        # Endpoints /api/users (perfil, eliminación de cuenta)
+│   │   │   ├── services/           # Consultas sobre la entidad User
+│   │   │   ├── dto/                # UpdateProfileDto, UserResponseDto
+│   │   │   └── users.module.ts
+│   │   ├── vault/                  # Bóveda Cifrada (Zero-Knowledge Sync)
+│   │   │   ├── controllers/        # Endpoints /api/vault (obtención y sincronización del blob)
+│   │   │   ├── services/           # Persistencia de blob, salt, IV y control de versiones
+│   │   │   ├── dto/                # SyncVaultDto, VaultResponseDto
+│   │   │   └── vault.module.ts
+│   │   └── audit/                  # Registro y consulta de auditoría de seguridad
+│   │       ├── controllers/        # Endpoints /api/audit (historial de accesos y eventos)
+│   │       ├── services/           # Inserción asíncrona de eventos de seguridad (AuditLog)
+│   │       ├── dto/                # AuditLogResponseDto, QueryAuditLogsDto
+│   │       └── audit.module.ts
+│   ├── app.controller.ts           # Health check / status endpoint (/api/health)
+│   ├── app.module.ts               # Módulo raíz que integra la configuración y submódulos
+│   ├── app.service.ts
+│   └── main.ts                     # Punto de entrada (Helmet, CORS, ValidationPipe, GlobalPrefix: 'api')
+├── .env.example                    # Plantilla de variables de entorno requeridas
+├── nest-cli.json
+├── package.json
+└── tsconfig.json
 ```
 
----
 
 ## 5. Esquema de Base de Datos (`schema.prisma`)
 

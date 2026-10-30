@@ -1,0 +1,49 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                 String      @id @default(uuid())
+  email              String      @unique
+  passwordHash       String      // Hash del login password (derivado en el cliente)
+  isTwoFactorEnabled Boolean     @default(false)
+  twoFactorSecret    String?     // Secreto TOTP
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  vault              Vault?
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+model Vault {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  encryptedBlob String   @db.Text // Contenido de la bóveda cifrado con AES-256-GCM
+  salt          String   // Salt para Argon2id usado en el cliente
+  iv            String   // Vector de Inicialización (IV) para AES-GCM
+  version       Int      @default(1)
+  updatedAt     DateTime @updatedAt
+
+  @@map("vaults")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String   // Ejemplos: "LOGIN_SUCCESS", "VAULT_SYNC", "2FA_ENABLED"
+  ipAddress String
+  userAgent String
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
