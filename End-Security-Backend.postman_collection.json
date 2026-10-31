@@ -169,7 +169,107 @@
       "response": []
     },
     {
-      "name": "6. Seguridad - DTO con Parámetro Extra (Mass Assignment Test)",
+      "name": "6. Vault - Descargar Bóveda (GET /vault)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/vault",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "vault"]
+        },
+        "description": "Descarga la bóveda cifrada del usuario autenticado (encryptedBlob, salt, iv, version). Si es nuevo, devuelve 404 para inicializar."
+      },
+      "response": []
+    },
+    {
+      "name": "7. Vault - Inicializar Bóveda (PUT /vault - Versión 1)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"encryptedBlob\": \"U2FsdGVkX1+vupppZxwVoWqqzrWXYahZSSlZKAdWsK3948sjd82...==\",\n  \"salt\": \"d9823f4a123e54b6789a\",\n  \"iv\": \"3a4b5c6d7e8f901234567890\",\n  \"version\": 1\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/vault",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "vault"]
+        },
+        "description": "Crea la primera versión de la bóveda cifrada en el servidor."
+      },
+      "response": []
+    },
+    {
+      "name": "8. Vault - Actualizar Bóveda (PUT /vault - Versión 2)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"encryptedBlob\": \"NUEVO_BLOB_CIFRADO_ACTUALIZADO_CON_NUEVAS_CUENTAS_CON_AES_GCM...==\",\n  \"salt\": \"d9823f4a123e54b6789a\",\n  \"iv\": \"9f8e7d6c5b4a321098765432\",\n  \"version\": 2\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/vault",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "vault"]
+        },
+        "description": "Actualiza la bóveda con la versión incrementada a 2."
+      },
+      "response": []
+    },
+    {
+      "name": "9. Vault - Conflicto de Versión (Debe fallar 409 Conflict)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"encryptedBlob\": \"INTENTO_DE_SOBREESCRITURA_DESACTUALIZADA...==\",\n  \"salt\": \"d9823f4a123e54b6789a\",\n  \"iv\": \"112233445566778899aabbcc\",\n  \"version\": 2\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/vault",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "vault"]
+        },
+        "description": "Prueba de concurrencia: Intenta enviar versión 2 cuando la base de datos ya está en la versión 2 (espera la versión 3). Debe retornar 409 Conflict."
+      },
+      "response": []
+    },
+    {
+      "name": "10. Seguridad - DTO con Parámetro Extra (Mass Assignment Test)",
       "request": {
         "method": "POST",
         "header": [
@@ -193,4 +293,3 @@
     }
   ]
 }
-
