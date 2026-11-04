@@ -19,8 +19,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
-    let message: string | object = 'Ha ocurrido un error interno en el servidor.';
+    let message: string | object =
+      'Ha ocurrido un error interno en el servidor.';
     let errorName = 'InternalServerError';
+    let details: unknown;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -31,8 +33,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
         message = res;
       } else if (typeof res === 'object' && res !== null) {
         const errorBody = res as Record<string, unknown>;
-        message = (errorBody['message'] as string | object) || exception.message;
+        message =
+          (errorBody['message'] as string | object) || exception.message;
         errorName = (errorBody['error'] as string) || exception.name;
+        // Información estructurada opcional y segura (p. ej. conflictos de sincronización)
+        details = errorBody['details'];
       }
     } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       // Manejar errores conocidos de Prisma de forma segura sin filtrar nombres de columnas o SQL
@@ -73,9 +78,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       statusCode: status,
       error: errorName,
       message,
+      ...(details !== undefined ? { details } : {}),
       path: request.url,
       timestamp: new Date().toISOString(),
     });
   }
 }
-

@@ -10,29 +10,23 @@ export const ClientInfo = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): ClientInfoData => {
     const request = ctx.switchToHttp().getRequest<Request>();
 
-    // Extraer IP considerando posibles proxies / balanceadores de carga
-    const xForwardedFor = request.headers['x-forwarded-for'];
-    let ip = '';
+    // request.ip ya respeta X-Forwarded-For solo para los proxies de confianza
+    // configurados con TRUST_PROXY (main.ts). Leer el encabezado directamente
+    // permitiría que cualquier cliente falsificara su IP en la auditoría.
+    let ip = request.ip || request.socket.remoteAddress || '127.0.0.1';
 
-    if (typeof xForwardedFor === 'string') {
-      ip = xForwardedFor.split(',')[0].trim();
-    } else if (Array.isArray(xForwardedFor) && xForwardedFor.length > 0) {
-      ip = xForwardedFor[0].trim();
-    } else {
-      ip = request.ip || request.socket.remoteAddress || '127.0.0.1';
+    if (ip.startsWith('::ffff:')) {
+      ip = ip.slice(7);
     }
-
-    // Normalizar IPv6 localhost
-    if (ip === '::1' || ip === '::ffff:127.0.0.1') {
+    if (ip === '::1') {
       ip = '127.0.0.1';
     }
 
-    const userAgent = request.headers['user-agent'] || 'Unknown Device';
+    const userAgent = (request.headers['user-agent'] || 'Unknown Device').slice(
+      0,
+      512,
+    );
 
-    return {
-      ipAddress: ip,
-      userAgent,
-    };
+    return { ipAddress: ip, userAgent };
   },
 );
-

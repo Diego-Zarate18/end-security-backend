@@ -6,6 +6,7 @@ import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { SessionsService, TokenService } from './services';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -15,15 +16,26 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: {
-          expiresIn: (configService.get<string>('JWT_EXPIRES_IN') || '15m') as any,
-        },
+        secret: configService.getOrThrow<string>('JWT_SECRET'),
+        signOptions: { algorithm: 'HS256' },
+        verifyOptions: { algorithms: ['HS256'] },
       }),
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard],
-  exports: [AuthService, JwtAuthGuard, JwtModule],
+  providers: [
+    AuthService,
+    TokenService,
+    SessionsService,
+    JwtStrategy,
+    JwtAuthGuard,
+  ],
+  exports: [
+    AuthService,
+    TokenService,
+    SessionsService,
+    JwtAuthGuard,
+    JwtModule,
+  ],
 })
 export class AuthModule {}

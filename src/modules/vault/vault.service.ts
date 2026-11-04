@@ -4,100 +4,199 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { vault_items } from '@prisma/client';
+import { bigintToNumber, fromBase64, toBase64 } from '../../common/utils';
 import { PrismaService } from '../../database/prisma.service';
-import { SyncVaultDto, VaultResponseDto } from './dto';
+import {
+  PushVaultChangesDto,
+  VaultConflictDto,
+  VaultItemDto,
+  VaultPushResponseDto,
+  VaultSyncResponseDto,
+} from './dto';
 
+/**
+ * Sincronización Zero-Knowledge por elemento.
+ *
+ * - Cada lote aceptado incrementa `users.vault_revision` y todos sus elementos
+ *   quedan marcados con esa revisión; el cliente usa la revisión como cursor.
+ * - `version` de cada elemento implementa control de concurrencia optimista.
+ * - Los borrados son tombstones (deleted_at) sin ciphertext, para que otros
+ *   dispositivos se enteren; se purgan después y se registra el límite en
+ *   `users.purged_through_revision`.
+ */
 @Injectable()
 export class VaultService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getVault(userId: string): Promise<VaultResponseDto> {
-    const vault = await this.prisma.vault.findUnique({
-      where: { userId },
+  async getChanges(
+    userId: string,
+    since: number,
+  ): Promise<VaultSyncResponseDto> {
+    const user = await this.prisma.users.findFirst({
+      where: { id: userId, deleted_at: null },
+      select: { vault_revision: true, purged_through_revision: true },
     });
-
-    if (!vault) {
-      throw new NotFoundException(
-        'No se ha encontrado ninguna bóveda para este usuario. Inicialice una nueva bóveda.',
-      );
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado.');
     }
 
+    const cursor = BigInt(since);
+    // Resincronización completa si el cliente parte de cero, si los tombstones
+    // que necesitaría ya se purgaron, o si su cursor es inconsistente.
+    const fullResync =
+      cursor === 0n ||
+      cursor < user.purged_through_revision ||
+      cursor > user.vault_revision;
+
+    const items = await this.prisma.vault_items.findMany({
+      where: fullResync
+        ? { user_id: userId, deleted_at: null }
+        : { user_id: userId, revision: { gt: cursor } },
+      orderBy: { revision: 'asc' },
+    });
+
     return {
-      id: vault.id,
-      userId: vault.userId,
-      encryptedBlob: vault.encryptedBlob,
-      salt: vault.salt,
-      iv: vault.iv,
-      version: vault.version,
-      updatedAt: vault.updatedAt,
+      revision: bigintToNumber(user.vault_revision),
+      purgedThroughRevision: bigintToNumber(user.purged_through_revision),
+      fullResync,
+      items: items.map((item) => this.toItemDto(item)),
     };
   }
 
-  async syncVault(
+  async pushChanges(
     userId: string,
-    dto: SyncVaultDto,
-  ): Promise<VaultResponseDto> {
-    const currentVault = await this.prisma.vault.findUnique({
-      where: { userId },
-    });
-
-    // Caso 1: Primera sincronización (creación inicial de la bóveda)
-    if (!currentVault) {
-      if (dto.version !== 1) {
-        throw new BadRequestException(
-          'La versión inicial de una nueva bóveda debe ser exactamente 1.',
-        );
-      }
-
-      const newVault = await this.prisma.vault.create({
-        data: {
-          userId,
-          encryptedBlob: dto.encryptedBlob,
-          salt: dto.salt,
-          iv: dto.iv,
-          version: 1,
-        },
-      });
-
-      return {
-        id: newVault.id,
-        userId: newVault.userId,
-        encryptedBlob: newVault.encryptedBlob,
-        salt: newVault.salt,
-        iv: newVault.iv,
-        version: newVault.version,
-        updatedAt: newVault.updatedAt,
-      };
-    }
-
-    // Caso 2: Bóveda existente (control de concurrencia optimista)
-    const expectedVersion = currentVault.version + 1;
-
-    if (dto.version !== expectedVersion) {
-      throw new ConflictException(
-        `Conflicto de sincronización: la versión enviada (${dto.version}) no coincide con la versión esperada (${expectedVersion}). Descargue la última versión de la bóveda antes de sobrescribir.`,
+    dto: PushVaultChangesDto,
+  ): Promise<VaultPushResponseDto> {
+    const changes = dto.items.map((item) => ({
+      ...item,
+      id: item.id.toLowerCase(),
+    }));
+    const ids = changes.map((c) => c.id);
+    if (new Set(ids).size !== ids.length) {
+      throw new BadRequestException(
+        'Un mismo elemento no puede aparecer más de una vez en el lote.',
       );
     }
 
-    const updatedVault = await this.prisma.vault.update({
-      where: { userId },
-      data: {
-        encryptedBlob: dto.encryptedBlob,
-        salt: dto.salt,
-        iv: dto.iv,
-        version: dto.version,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      // El UPDATE bloquea la fila del usuario y serializa lotes concurrentes
+      const user = await tx.users.update({
+        where: { id: userId },
+        data: { vault_revision: { increment: 1 } },
+        select: { vault_revision: true, deleted_at: true },
+      });
+      if (user.deleted_at) {
+        throw new NotFoundException('Usuario no encontrado.');
+      }
+      const revision = user.vault_revision;
 
+      const existing = await tx.vault_items.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, user_id: true, version: true },
+      });
+      const byId = new Map(existing.map((e) => [e.id, e]));
+
+      const conflicts: VaultConflictDto[] = [];
+      for (const change of changes) {
+        const current = byId.get(change.id);
+        if (!current) {
+          if (change.baseVersion !== 0 || change.deleted) {
+            conflicts.push({
+              id: change.id,
+              reason: 'not_found',
+              currentVersion: null,
+            });
+          }
+        } else if (current.user_id !== userId) {
+          conflicts.push({
+            id: change.id,
+            reason: 'id_unavailable',
+            currentVersion: null,
+          });
+        } else if (current.version !== change.baseVersion) {
+          conflicts.push({
+            id: change.id,
+            reason: 'version_mismatch',
+            currentVersion: current.version,
+          });
+        }
+      }
+
+      if (conflicts.length > 0) {
+        // Lanzar dentro de la transacción revierte también el incremento de revisión
+        throw new ConflictException({
+          error: 'VaultSyncConflict',
+          message:
+            'Conflicto de sincronización: descarga los cambios pendientes y vuelve a intentarlo.',
+          details: { conflicts },
+        });
+      }
+
+      const now = new Date();
+      const applied: VaultPushResponseDto['applied'] = [];
+
+      for (const change of changes) {
+        const version = change.baseVersion + 1;
+
+        if (change.deleted) {
+          await tx.vault_items.update({
+            where: { id: change.id },
+            data: {
+              version,
+              revision,
+              deleted_at: now,
+              nonce: new Uint8Array(0),
+              ciphertext: new Uint8Array(0),
+            },
+          });
+        } else {
+          const payload = {
+            version,
+            revision,
+            deleted_at: null,
+            nonce: fromBase64(change.nonce!),
+            ciphertext: fromBase64(change.ciphertext!),
+            format_version: change.formatVersion!,
+          };
+          if (byId.has(change.id)) {
+            await tx.vault_items.update({
+              where: { id: change.id },
+              data: payload,
+            });
+          } else {
+            await tx.vault_items.create({
+              data: { id: change.id, user_id: userId, ...payload },
+            });
+          }
+        }
+
+        applied.push({
+          id: change.id,
+          version,
+          revision: bigintToNumber(revision),
+        });
+      }
+
+      return { revision: bigintToNumber(revision), applied };
+    });
+  }
+
+  private toItemDto(item: vault_items): VaultItemDto {
+    const deleted = item.deleted_at !== null;
     return {
-      id: updatedVault.id,
-      userId: updatedVault.userId,
-      encryptedBlob: updatedVault.encryptedBlob,
-      salt: updatedVault.salt,
-      iv: updatedVault.iv,
-      version: updatedVault.version,
-      updatedAt: updatedVault.updatedAt,
+      id: item.id,
+      version: item.version,
+      revision: bigintToNumber(item.revision),
+      deleted,
+      ...(deleted
+        ? {}
+        : {
+            nonce: toBase64(item.nonce),
+            ciphertext: toBase64(item.ciphertext),
+          }),
+      formatVersion: item.format_version,
+      updatedAt: item.updated_at,
     };
   }
 }
-

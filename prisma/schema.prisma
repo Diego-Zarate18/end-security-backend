@@ -11,15 +11,16 @@ model users {
   id                   String                @id @default(uuid()) @db.Uuid
   email                String                @unique
   display_name         String
-  auth_hash            Bytes
+  auth_hash            String                // hash Argon2id (formato PHC) del auth key derivado en el cliente
   kdf_salt             Bytes
+  kdf_memory_kib       Int
   kdf_iterations       Int
   kdf_parallelism      Int                   @db.SmallInt
   pvk_ciphertext       Bytes
-  pvk_nonce             Bytes
-  key_version          Int
-  vault_revision       BigInt
-  purged_through_revision BigInt
+  pvk_nonce            Bytes
+  key_version          Int                   @default(1)
+  vault_revision       BigInt                @default(0)
+  purged_through_revision BigInt             @default(0)
   email_verified_at    DateTime?             @db.Timestamptz(6)
   created_at           DateTime              @default(now()) @db.Timestamptz(6)
   updated_at           DateTime              @updatedAt @db.Timestamptz(6)
@@ -40,7 +41,7 @@ model sessions {
   id                         String    @id @default(uuid()) @db.Uuid
   user_id                    String    @db.Uuid
   device_name                String
-  refresh_token_hash         Bytes
+  refresh_token_hash         Bytes     @unique
   previous_refresh_token_hash Bytes?   @map("previous_refresh_token_hash")
   expires_at                 DateTime  @db.Timestamptz(6)
   revoked_at                 DateTime? @db.Timestamptz(6)
@@ -61,7 +62,7 @@ model email_verifications {
   purpose      String
   target_email String
   code_hash    Bytes
-  attempts     Int       @db.SmallInt
+  attempts     Int       @default(0) @db.SmallInt
   created_at   DateTime  @default(now()) @db.Timestamptz(6)
   expires_at   DateTime  @db.Timestamptz(6)
   consumed_at  DateTime? @db.Timestamptz(6)
@@ -94,7 +95,7 @@ model audit_log {
 
 model audit_log_pii {
   id          BigInt    @id
-  ip          Int
+  ip          String    @db.Inet
   user_agent  String
 
   audit_log   audit_log @relation(fields: [id], references: [id], onDelete: Cascade)

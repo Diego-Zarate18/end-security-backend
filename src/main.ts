@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -8,8 +9,14 @@ import { HttpExceptionFilter } from './common/filters';
 import { TransformInterceptor } from './common/interceptors';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
+
+  // 0. Proxies de confianza (Railway = 1) para que req.ip y el rate limit usen la IP real
+  app.set('trust proxy', configService.get<number>('TRUST_PROXY', 0));
+
+  // 0.1 Límite del cuerpo JSON: lotes de sincronización de la bóveda (50 x 32 KiB en base64)
+  app.useBodyParser('json', { limit: '3mb' });
 
   // 1. Cabeceras HTTP de seguridad con Helmet
   app.use(helmet());
@@ -81,6 +88,8 @@ async function bootstrap() {
 
   const port = configService.get<number>('PORT', 3000);
   await app.listen(port);
-  console.log(`[EndSecurityAPI] Servidor activo en http://localhost:${port}/api`);
+  console.log(
+    `[EndSecurityAPI] Servidor activo en http://localhost:${port}/api`,
+  );
 }
-bootstrap();
+void bootstrap();

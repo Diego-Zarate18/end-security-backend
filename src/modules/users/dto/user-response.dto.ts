@@ -1,8 +1,8 @@
 export class UserResponseDto {
   id: string;
   email: string;
-  isTwoFactorEnabled: boolean;
+  displayName: string;
+  emailVerified: boolean;
+  twoFactorEnabled: boolean;
   createdAt: Date;
-  updatedAt: Date;
 }
-

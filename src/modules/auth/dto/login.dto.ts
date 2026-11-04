@@ -1,12 +1,20 @@
-import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsBase64Bytes } from '../../../common/validators';
+import { normalizeEmail, trimString } from './normalize';
 
 export class LoginDto {
+  @Transform(normalizeEmail)
   @IsEmail({}, { message: 'El correo electrónico no es válido.' })
-  @IsNotEmpty({ message: 'El correo electrónico es requerido.' })
+  @MaxLength(254)
   email: string;
 
-  @IsString({ message: 'El hash de contraseña debe ser una cadena de texto.' })
-  @IsNotEmpty({ message: 'El hash de contraseña es requerido.' })
-  passwordHash: string;
-}
+  @IsBase64Bytes(32, 64)
+  authHash: string;
 
+  @Transform(trimString)
+  @IsString()
+  @IsNotEmpty({ message: 'El nombre del dispositivo es requerido.' })
+  @MaxLength(64)
+  deviceName: string;
+}

@@ -1,15 +1,16 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
-
-export class CreateUserDto {
-  @IsEmail({}, { message: 'El correo electrónico proporcionado no es válido.' })
-  @IsNotEmpty({ message: 'El correo electrónico es requerido.' })
+/**
+ * Datos internos para crear un usuario. No es un DTO de entrada HTTP: la
+ * validación ocurre en RegisterDto y aquí ya llega el material decodificado.
+ */
+export interface CreateUserData {
   email: string;
-
-  @IsString({ message: 'El hash de contraseña debe ser una cadena de texto.' })
-  @IsNotEmpty({ message: 'El hash de contraseña es requerido.' })
-  @MinLength(16, {
-    message: 'El hash de contraseña no cumple con la longitud mínima requerida.',
-  })
-  passwordHash: string;
+  displayName: string;
+  /** Hash Argon2id (formato PHC) calculado por el servidor. */
+  authHash: string;
+  kdfSalt: Uint8Array<ArrayBuffer>;
+  kdfMemoryKib: number;
+  kdfIterations: number;
+  kdfParallelism: number;
+  pvkCiphertext: Uint8Array<ArrayBuffer>;
+  pvkNonce: Uint8Array<ArrayBuffer>;
 }
-

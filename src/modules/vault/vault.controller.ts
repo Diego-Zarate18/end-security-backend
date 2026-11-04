@@ -1,25 +1,41 @@
-import { Body, Controller, Get, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators';
-import { SyncVaultDto, VaultResponseDto } from './dto';
+import {
+  PushVaultChangesDto,
+  SyncQueryDto,
+  VaultPushResponseDto,
+  VaultSyncResponseDto,
+} from './dto';
 import { VaultService } from './vault.service';
 
 @Controller('vault')
 export class VaultController {
   constructor(private readonly vaultService: VaultService) {}
 
-  @Get()
-  async getVault(
+  /** Cambios posteriores a la revisión `since` (o la bóveda completa). */
+  @Get('sync')
+  getChanges(
     @CurrentUser('id') userId: string,
-  ): Promise<VaultResponseDto> {
-    return this.vaultService.getVault(userId);
+    @Query() query: SyncQueryDto,
+  ): Promise<VaultSyncResponseDto> {
+    return this.vaultService.getChanges(userId, query.since ?? 0);
   }
 
-  @Put()
-  async syncVault(
+  /** Aplica un lote de cambios de forma atómica (todo o nada). */
+  @HttpCode(HttpStatus.OK)
+  @Post('sync')
+  pushChanges(
     @CurrentUser('id') userId: string,
-    @Body() syncVaultDto: SyncVaultDto,
-  ): Promise<VaultResponseDto> {
-    return this.vaultService.syncVault(userId, syncVaultDto);
+    @Body() dto: PushVaultChangesDto,
+  ): Promise<VaultPushResponseDto> {
+    return this.vaultService.pushChanges(userId, dto);
   }
 }
-

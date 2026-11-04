@@ -14,13 +14,12 @@ export class AppService {
         timestamp: new Date().toISOString(),
         database: 'connected',
       };
-    } catch (error) {
+    } catch {
       return {
         status: 'degraded',
         service: 'end-security-backend',
         timestamp: new Date().toISOString(),
         database: 'disconnected',
-        error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
   }

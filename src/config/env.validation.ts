@@ -1,7 +1,10 @@
 import { plainToInstance } from 'class-transformer';
 import {
   IsEnum,
+  IsInt,
   IsNumber,
+  Min,
+  MinLength,
   IsOptional,
   IsString,
   validateSync,
@@ -26,13 +29,16 @@ export class EnvironmentVariables {
   DATABASE_URL: string;
 
   @IsString()
+  @MinLength(32)
   JWT_SECRET: string;
 
   @IsString()
   @IsOptional()
   JWT_EXPIRES_IN: string = '15m';
 
+  /** También se usa como pepper para el HMAC de los refresh tokens. */
   @IsString()
+  @MinLength(32)
   JWT_REFRESH_SECRET: string;
 
   @IsString()
@@ -58,6 +64,12 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   CORS_ORIGIN: string = 'http://localhost:3000';
+
+  /** Número de proxies inversos de confianza delante de la API (Railway: 1). */
+  @IsInt()
+  @Min(0)
+  @IsOptional()
+  TRUST_PROXY: number = 0;
 }
 
 export function validateEnv(config: Record<string, unknown>) {
@@ -73,6 +85,20 @@ export function validateEnv(config: Record<string, unknown>) {
     throw new Error(`[ConfigValidationError] ${errors.toString()}`);
   }
 
+  if (validatedConfig.NODE_ENV === Environment.Production) {
+    const placeholders = [
+      validatedConfig.JWT_SECRET,
+      validatedConfig.JWT_REFRESH_SECRET,
+    ].some((secret) => secret.includes('change_in_production'));
+    if (
+      placeholders ||
+      validatedConfig.JWT_SECRET === validatedConfig.JWT_REFRESH_SECRET
+    ) {
+      throw new Error(
+        '[ConfigValidationError] En producción los secretos JWT deben ser propios y distintos entre sí.',
+      );
+    }
+  }
+
   return validatedConfig;
 }
-
