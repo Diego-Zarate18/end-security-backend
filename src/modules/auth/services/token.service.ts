@@ -68,6 +68,14 @@ export class TokenService {
     return this.hmac(`refresh:${secret}`);
   }
 
+  /**
+   * HMAC de un código de verificación de correo, ligado a su registro. Con el
+   * pepper del servidor, un volcado de la BD no permite probar los 10^6 códigos.
+   */
+  hashEmailCode(verificationId: string, code: string): Uint8Array<ArrayBuffer> {
+    return this.hmac(`email-code:${verificationId}:${code}`);
+  }
+
   /** Salt determinista para correos inexistentes en /auth/prelogin. */
   fakeKdfSalt(email: string): Uint8Array<ArrayBuffer> {
     return this.hmac(`prelogin-salt:${email}`).slice(0, 16);

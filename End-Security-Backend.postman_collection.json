@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a91e532b-67df-485a-93f9-7157a5eb23b0",
     "name": "End Security - Backend API",
-    "description": "Pruebas del backend de End Security (gestor de contraseñas Zero-Knowledge).\n\nEjecuta la colección completa con el Runner, en orden: cada ejecución crea una cuenta nueva. Una ejecución completa hace 13 peticiones a /api/auth, que por defecto acepta 10 por minuto (AUTH_THROTTLE_LIMIT). Para correrla de una vez, sube AUTH_THROTTLE_LIMIT a 30 en tu .env local o pon un retraso de 5000 ms en el Runner.\n\nLos valores criptográficos son bytes de prueba en base64. La app Android los obtiene con Argon2id y AES-256-GCM.",
+    "description": "Pruebas del backend de End Security (gestor de contraseñas Zero-Knowledge).\n\nEjecuta la colección completa con el Runner, en orden: cada ejecución crea una cuenta nueva. Las carpetas 0 a 6 se corren con el Runner; la 7 (correo) se corre a mano porque necesita el código que llega por correo o aparece en la consola de la API. La colección completa hace hasta 24 peticiones a /api/auth y por defecto se aceptan 10 por minuto (AUTH_THROTTLE_LIMIT): sube ese valor a 30 en tu .env local o pon un retraso de 5000 ms en el Runner.\n\nLos valores criptográficos son bytes de prueba en base64. La app Android los obtiene con Argon2id y AES-256-GCM.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -130,8 +130,10 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Cuenta nueva: solo esta petición cambia {{email}}; el resto reutiliza la cuenta registrada",
-                  "pm.collectionVariables.set('email', `qa+${Date.now()}@endsecurity.test`);"
+                  "// Cuenta nueva: solo esta petición cambia {{email}}; el resto reutiliza la cuenta registrada.",
+                  "// Para recibir correos reales con Resend, pon tu correo en la variable fixedEmail.",
+                  "const fixed = pm.collectionVariables.get('fixedEmail');",
+                  "pm.collectionVariables.set('email', fixed || `qa+${Date.now()}@endsecurity.test`);"
                 ]
               }
             },
@@ -1295,6 +1297,559 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "7. Correo (manual)",
+      "item": [
+        {
+          "name": "Preparar cuenta",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Esta carpeta funciona sola: crea su propia cuenta (o usa fixedEmail si ya la registraste)",
+                  "const fixed = pm.collectionVariables.get('fixedEmail');",
+                  "pm.collectionVariables.set('email', fixed || `qa+correo${Date.now()}@endsecurity.test`);",
+                  "pm.collectionVariables.set('newEmail', '');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Cuenta creada (201) o ya existente con fixedEmail (409)', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Crea la cuenta para las pruebas de correo. Con fixedEmail ya registrado responde 409 y se sigue con el login.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 65536,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const tokens = pm.response.json().data.tokens;",
+                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Solicitar código de verificación",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 202', () => pm.response.to.have.status(202));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('Destino enmascarado y cooldown', () => {",
+                  "  pm.expect(data.sentTo).to.include('***@');",
+                  "  pm.expect(data.resendAvailableInSeconds).to.eql(60);",
+                  "});",
+                  "pm.collectionVariables.set('emailCode', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/verify/request",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "verify",
+                "request"
+              ]
+            },
+            "description": "Envía un código de 6 dígitos al correo de la cuenta. Sin RESEND_API_KEY aparece en la consola de la API ([MailDev])."
+          },
+          "response": []
+        },
+        {
+          "name": "Reenviar antes de 60 s (429)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 429', () => pm.response.to.have.status(429));",
+                  "pm.test('Indica cuánto esperar', () => pm.expect(pm.response.json().details.retryAfterSeconds).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/verify/request",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "verify",
+                "request"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Confirmar con código incorrecto (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Descuenta un intento', () => pm.expect(pm.response.json().details.remainingAttempts).to.eql(4));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/verify/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "verify",
+                "confirm"
+              ]
+            },
+            "description": "Hay una probabilidad de 1 en un millón de que 000000 sea el código real.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Confirmar verificación",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('emailCode')) {",
+                  "  console.log('Falta {{emailCode}}: copia el código del correo o de la consola de la API.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Correo verificado', () => pm.expect(pm.response.json().data.emailVerified).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/verify/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "verify",
+                "confirm"
+              ]
+            },
+            "description": "Antes de enviarla, pon el código recibido en la variable emailCode. Si está vacía, Postman la salta.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{emailCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Solicitar verificación ya verificada (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/verify/request",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "verify",
+                "request"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Cambio de correo con contraseña incorrecta (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 403 sin cerrar la sesión', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/change/request",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "change",
+                "request"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newEmail\": \"otro@endsecurity.test\",\n  \"authHash\": \"yM/W3eTr8vkABw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqE=\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Solicitar cambio de correo",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('newEmail')) {",
+                  "  pm.collectionVariables.set('newEmail', `qa+nuevo${Date.now()}@endsecurity.test`);",
+                  "}",
+                  "pm.collectionVariables.set('emailChangeCode', '');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/change/request",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "change",
+                "request"
+              ]
+            },
+            "description": "El código llega al correo NUEVO. Para recibirlo con Resend, pon una dirección real en newEmail (requiere dominio verificado en Resend).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newEmail\": \"{{newEmail}}\",\n  \"authHash\": \"{{authHash}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Confirmar cambio de correo",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('emailChangeCode')) {",
+                  "  console.log('Falta {{emailChangeCode}}: copia el código del correo o de la consola de la API.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const user = pm.response.json().data;",
+                  "pm.test('El correo cambió y quedó verificado', () => {",
+                  "  pm.expect(user.email).to.eql(pm.collectionVariables.get('newEmail'));",
+                  "  pm.expect(user.emailVerified).to.eql(true);",
+                  "});",
+                  "pm.collectionVariables.set('email', user.email);",
+                  "pm.collectionVariables.set('newEmail', '');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/change/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "change",
+                "confirm"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{emailChangeCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login con el correo nuevo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const tokens = pm.response.json().data.tokens;",
+                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [
@@ -1310,6 +1865,26 @@
     },
     {
       "key": "unknownEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "fixedEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "emailCode",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "newEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "emailChangeCode",
       "value": "",
       "type": "string"
     },

@@ -1,4 +1,4 @@
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
@@ -7,6 +7,7 @@ import {
   MinLength,
   IsOptional,
   IsString,
+  Matches,
   validateSync,
 } from 'class-validator';
 
@@ -49,6 +50,21 @@ export class EnvironmentVariables {
   @IsString()
   @MinLength(32)
   AUDIT_HMAC_KEY: string;
+
+  /** API key de Resend (re_...). Sin ella, en desarrollo los correos van a la consola. */
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @Matches(/^re_[A-Za-z0-9_]+$/, {
+    message: 'RESEND_API_KEY debe ser una API key de Resend (re_...).',
+  })
+  @IsOptional()
+  RESEND_API_KEY?: string;
+
+  /** Remitente; con onboarding@resend.dev solo se puede enviar al correo de tu cuenta Resend. */
+  @IsString()
+  @IsOptional()
+  EMAIL_FROM: string = 'End Security <onboarding@resend.dev>';
 
   @IsString()
   @IsOptional()
@@ -96,6 +112,11 @@ export function validateEnv(config: Record<string, unknown>) {
       validatedConfig.JWT_REFRESH_SECRET,
       validatedConfig.AUDIT_HMAC_KEY,
     ].some((secret) => secret.includes('change_in_production'));
+    if (!validatedConfig.RESEND_API_KEY) {
+      throw new Error(
+        '[ConfigValidationError] En producción RESEND_API_KEY es obligatoria.',
+      );
+    }
     if (
       placeholders ||
       validatedConfig.JWT_SECRET === validatedConfig.JWT_REFRESH_SECRET

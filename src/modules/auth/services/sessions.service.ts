@@ -13,6 +13,7 @@ export type SessionRevokeReason =
   | 'refresh_token_reuse'
   | 'revoked_by_user'
   | 'password_change'
+  | 'email_change'
   | 'account_deleted';
 
 export interface CreatedSession {

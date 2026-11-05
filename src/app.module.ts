@@ -7,6 +7,7 @@ import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './database/prisma.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { EmailVerificationModule } from './modules/email-verification/email-verification.module';
 import { JwtAuthGuard } from './modules/auth/guards';
 import { UsersModule } from './modules/users/users.module';
 import { VaultModule } from './modules/vault/vault.module';
@@ -22,6 +23,7 @@ import { VaultModule } from './modules/vault/vault.module';
     AuthModule,
     VaultModule,
     AuditModule,
+    EmailVerificationModule,
   ],
   controllers: [AppController],
   providers: [

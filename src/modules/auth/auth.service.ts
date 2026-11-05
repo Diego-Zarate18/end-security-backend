@@ -187,6 +187,16 @@ export class AuthService implements OnModuleInit {
     return this.buildAuthResponse(user, tokens);
   }
 
+  /** Reautenticación para operaciones sensibles (cambio de correo, 2FA, borrado de cuenta). */
+  async verifyAuthHash(
+    user: { auth_hash: string },
+    authHashBase64: string,
+  ): Promise<boolean> {
+    return argon2
+      .verify(user.auth_hash, Buffer.from(fromBase64(authHashBase64)))
+      .catch(() => false);
+  }
+
   refresh(refreshToken: string, client: ClientInfoData): Promise<TokenPairDto> {
     return this.sessionsService.rotate(refreshToken, client);
   }
