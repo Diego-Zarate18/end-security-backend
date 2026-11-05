@@ -68,9 +68,16 @@ export class SessionsService {
 
     const session = await this.prisma.sessions.findUnique({
       where: { id: parsed.sessionId },
-      include: { user: { select: { deleted_at: true } } },
+      include: {
+        user: { select: { deleted_at: true, email_verified_at: true } },
+      },
     });
-    if (!session || session.revoked_at || session.user.deleted_at) {
+    if (
+      !session ||
+      session.revoked_at ||
+      session.user.deleted_at ||
+      !session.user.email_verified_at
+    ) {
       throw invalidRefresh();
     }
 
@@ -144,7 +151,8 @@ export class SessionsService {
         user_id: userId,
         revoked_at: null,
         expires_at: { gt: new Date() },
-        user: { deleted_at: null },
+        // Sin correo verificado no hay acceso, aunque exista una sesión previa
+        user: { deleted_at: null, email_verified_at: { not: null } },
       },
       select: { id: true },
     });

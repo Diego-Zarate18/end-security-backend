@@ -13,33 +13,14 @@ import {
 } from '../dto';
 import { EmailVerificationService } from '../services';
 
-@Controller('auth/email')
+/** Cambio de correo. La verificación inicial está en /auth/email/verify/* (AuthController). */
+@Controller('auth/email/change')
 export class EmailVerificationController {
   constructor(private readonly service: EmailVerificationService) {}
 
-  /** Envía un código al correo actual de la cuenta. */
-  @HttpCode(HttpStatus.ACCEPTED)
-  @Post('verify/request')
-  requestVerification(
-    @CurrentUser() user: AuthenticatedUser,
-    @ClientInfo() client: ClientInfoData,
-  ): Promise<CodeSentDto> {
-    return this.service.requestVerification(this.actor(user, client));
-  }
-
-  @HttpCode(HttpStatus.OK)
-  @Post('verify/confirm')
-  confirmVerification(
-    @CurrentUser() user: AuthenticatedUser,
-    @ClientInfo() client: ClientInfoData,
-    @Body() dto: ConfirmEmailCodeDto,
-  ): Promise<UserResponseDto> {
-    return this.service.confirmVerification(this.actor(user, client), dto.code);
-  }
-
   /** Requiere la contraseña maestra; el código llega al correo nuevo. */
   @HttpCode(HttpStatus.ACCEPTED)
-  @Post('change/request')
+  @Post('request')
   requestEmailChange(
     @CurrentUser() user: AuthenticatedUser,
     @ClientInfo() client: ClientInfoData,
@@ -49,7 +30,7 @@ export class EmailVerificationController {
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('change/confirm')
+  @Post('confirm')
   confirmEmailChange(
     @CurrentUser() user: AuthenticatedUser,
     @ClientInfo() client: ClientInfoData,

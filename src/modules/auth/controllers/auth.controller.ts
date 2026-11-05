@@ -4,19 +4,22 @@ import {
   type ClientInfoData,
   CurrentUser,
   Public,
-} from '../../common/decorators';
-import { AuthService } from './auth.service';
+} from '../../../common/decorators';
+import { AuthService, LoginResult } from '../services/auth.service';
 import {
   AuthResponseDto,
+  EmailVerificationRequiredDto,
   LoginDto,
   PreloginDto,
   PreloginResponseDto,
   RefreshTokenDto,
   RegisterDto,
+  ResendEmailCodeDto,
   TokenPairDto,
   TwoFactorChallengeDto,
-} from './dto';
-import type { AuthenticatedUser } from './strategies';
+  VerifyEmailDto,
+} from '../dto';
+import type { AuthenticatedUser } from '../strategies';
 
 @Controller('auth')
 export class AuthController {
@@ -34,7 +37,7 @@ export class AuthController {
   register(
     @Body() dto: RegisterDto,
     @ClientInfo() client: ClientInfoData,
-  ): Promise<AuthResponseDto> {
+  ): Promise<EmailVerificationRequiredDto> {
     return this.authService.register(dto, client);
   }
 
@@ -44,8 +47,29 @@ export class AuthController {
   login(
     @Body() dto: LoginDto,
     @ClientInfo() client: ClientInfoData,
-  ): Promise<AuthResponseDto | TwoFactorChallengeDto> {
+  ): Promise<LoginResult> {
     return this.authService.login(dto, client);
+  }
+
+  /** Confirma el correo con el código e inicia la sesión. */
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Post('email/verify/confirm')
+  verifyEmail(
+    @Body() dto: VerifyEmailDto,
+    @ClientInfo() client: ClientInfoData,
+  ): Promise<AuthResponseDto | TwoFactorChallengeDto> {
+    return this.authService.verifyEmail(dto, client);
+  }
+
+  @Public()
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Post('email/verify/resend')
+  resendEmailCode(
+    @Body() dto: ResendEmailCodeDto,
+    @ClientInfo() client: ClientInfoData,
+  ): Promise<EmailVerificationRequiredDto> {
+    return this.authService.resendEmailCode(dto, client);
   }
 
   @Public()

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../../database/prisma.service';
-import { CreateUserData, UserResponseDto } from './dto';
+import { PrismaService } from '../../../database/prisma.service';
+import { CreateUserData, UserResponseDto } from '../dto';
 
 const withTwoFactor = {
   two_factor: { select: { status: true } },

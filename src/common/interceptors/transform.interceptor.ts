@@ -14,15 +14,16 @@ export interface StandardResponse<T> {
 }
 
 @Injectable()
-export class TransformInterceptor<T>
-  implements NestInterceptor<T, StandardResponse<T>>
-{
+export class TransformInterceptor<T> implements NestInterceptor<
+  T,
+  StandardResponse<T>
+> {
   intercept(
     _context: ExecutionContext,
-    next: CallHandler,
+    next: CallHandler<T>,
   ): Observable<StandardResponse<T>> {
     return next.handle().pipe(
-      map((data) => ({
+      map((data: T) => ({
         success: true,
         data,
         timestamp: new Date().toISOString(),
@@ -30,4 +31,3 @@ export class TransformInterceptor<T>
     );
   }
 }
-

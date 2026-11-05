@@ -4,6 +4,7 @@ import * as argon2 from 'argon2';
 export enum TokenType {
   Access = 'access',
   TwoFactorPending = '2fa_pending',
+  EmailVerificationPending = 'email_pending',
 }
 
 /**
@@ -26,3 +27,6 @@ export const SERVER_ARGON2_OPTIONS: argon2.HashOptions = {
 };
 
 export const TWO_FACTOR_CHALLENGE_TTL_SECONDS = 300;
+
+/** Más largo que la vigencia del código (15 min) para permitir reenvíos. */
+export const EMAIL_CHALLENGE_TTL_SECONDS = 1800;

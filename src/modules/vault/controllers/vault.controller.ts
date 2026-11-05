@@ -11,15 +11,15 @@ import {
   ClientInfo,
   type ClientInfoData,
   CurrentUser,
-} from '../../common/decorators';
-import type { AuthenticatedUser } from '../auth/strategies';
+} from '../../../common/decorators';
+import type { AuthenticatedUser } from '../../auth/strategies';
 import {
   PushVaultChangesDto,
   SyncQueryDto,
   VaultPushResponseDto,
   VaultSyncResponseDto,
-} from './dto';
-import { VaultService } from './vault.service';
+} from '../dto';
+import { VaultService } from '../services/vault.service';
 
 @Controller('vault')
 export class VaultController {

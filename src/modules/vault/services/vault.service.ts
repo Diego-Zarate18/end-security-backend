@@ -5,18 +5,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { vault_items } from '@prisma/client';
-import type { ClientInfoData } from '../../common/decorators';
-import { bigintToNumber, fromBase64, toBase64 } from '../../common/utils';
-import { PrismaService } from '../../database/prisma.service';
-import { AuditEvent } from '../audit/audit.constants';
-import { AuditService } from '../audit/services';
+import type { ClientInfoData } from '../../../common/decorators';
+import { bigintToNumber, fromBase64, toBase64 } from '../../../common/utils';
+import { PrismaService } from '../../../database/prisma.service';
+import { AuditEvent } from '../../audit/audit.constants';
+import { AuditService } from '../../audit/services';
 import {
   PushVaultChangesDto,
   VaultConflictDto,
   VaultItemDto,
   VaultPushResponseDto,
   VaultSyncResponseDto,
-} from './dto';
+} from '../dto';
 
 /**
  * Sincronización Zero-Knowledge por elemento.

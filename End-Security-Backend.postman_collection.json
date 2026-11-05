@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a91e532b-67df-485a-93f9-7157a5eb23b0",
     "name": "End Security - Backend API",
-    "description": "Pruebas del backend de End Security (gestor de contraseñas Zero-Knowledge).\n\nEjecuta la colección completa con el Runner, en orden: cada ejecución crea una cuenta nueva. Las carpetas 0 a 6 se corren con el Runner; la 7 (correo) se corre a mano porque necesita el código que llega por correo o aparece en la consola de la API. La colección completa hace hasta 24 peticiones a /api/auth y por defecto se aceptan 10 por minuto (AUTH_THROTTLE_LIMIT): sube ese valor a 30 en tu .env local o pon un retraso de 5000 ms en el Runner.\n\nLos valores criptográficos son bytes de prueba en base64. La app Android los obtiene con Argon2id y AES-256-GCM.",
+    "description": "Una petición por endpoint, agrupadas por módulo.\n\nOrden para probar una cuenta nueva: Auth → Registro → (copia el código en emailCode) → Confirmar código de correo → Usuario, Bóveda, Auditoría, Cambio de correo → Auth → Logout.\n\nSi email está vacío se genera uno aleatorio. Para recibir el código con Resend, escribe en email el correo de tu cuenta de Resend antes de Registro.\n\nLos valores criptográficos son bytes de prueba en base64; la app Android los obtiene con Argon2id y AES-256-GCM.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -15,9 +15,22 @@
       }
     ]
   },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get('email')) {",
+          "  pm.collectionVariables.set('email', `qa+${Date.now()}@endsecurity.test`);",
+          "}"
+        ]
+      }
+    }
+  ],
   "item": [
     {
-      "name": "0. Salud",
+      "name": "General",
       "item": [
         {
           "name": "Health check",
@@ -27,8 +40,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Base de datos conectada', () => pm.expect(pm.response.json().data.database).to.eql('connected'));"
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -46,7 +58,7 @@
                 "health"
               ]
             },
-            "description": "Comprueba que la API y PostgreSQL responden. No requiere token.",
+            "description": "Comprueba que la API y PostgreSQL responden.",
             "auth": {
               "type": "noauth"
             }
@@ -56,33 +68,17 @@
       ]
     },
     {
-      "name": "1. Registro y sesión",
+      "name": "Auth",
       "item": [
         {
-          "name": "Prelogin - correo inexistente",
+          "name": "Prelogin",
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set('unknownEmail', `noexiste+${Date.now()}@endsecurity.test`);"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const kdf = pm.response.json().data.kdf;",
-                  "pm.test('Devuelve parámetros KDF por defecto (no revela que la cuenta no existe)', () => {",
-                  "  pm.expect(kdf.memoryKib).to.eql(65536);",
-                  "  pm.expect(kdf.iterations).to.eql(3);",
-                  "  pm.expect(kdf.parallelism).to.eql(4);",
-                  "  pm.expect(kdf.salt).to.be.a('string');",
-                  "});"
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -106,10 +102,10 @@
                 "prelogin"
               ]
             },
-            "description": "Para un correo que no existe responde con parámetros por defecto y un salt determinista, igual que para una cuenta real.",
+            "description": "Parámetros Argon2id del correo. Para correos inexistentes responde con valores por defecto (no revela si la cuenta existe).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"{{unknownEmail}}\"\n}",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -126,35 +122,14 @@
           "name": "Registro",
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Cuenta nueva: solo esta petición cambia {{email}}; el resto reutiliza la cuenta registrada.",
-                  "// Para recibir correos reales con Resend, pon tu correo en la variable fixedEmail.",
-                  "const fixed = pm.collectionVariables.get('fixedEmail');",
-                  "pm.collectionVariables.set('email', fixed || `qa+${Date.now()}@endsecurity.test`);"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 201', () => pm.response.to.have.status(201));",
-                  "const data = pm.response.json().data;",
-                  "pm.test('Incluye tokens, perfil y llaves', () => {",
-                  "  pm.expect(data.requires2FA).to.eql(false);",
-                  "  pm.expect(data.tokens.accessToken).to.be.a('string');",
-                  "  pm.expect(data.tokens.refreshToken).to.match(/^[0-9a-f-]{36}\\./);",
-                  "  pm.expect(data.user.email).to.eql(pm.collectionVariables.get('email'));",
-                  "  pm.expect(data.keys.pvk.ciphertext).to.eql(pm.collectionVariables.get('pvkCiphertext'));",
-                  "});",
                   "",
-                  "const tokens = pm.response.json().data.tokens;",
-                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                  "pm.collectionVariables.set('challengeToken', pm.response.json().data.challengeToken);",
+                  "pm.collectionVariables.set('emailCode', '');"
                 ]
               }
             }
@@ -178,7 +153,7 @@
                 "register"
               ]
             },
-            "description": "Registra la cuenta con el auth key, los parámetros KDF y la clave de bóveda cifrada (PVK). Los valores de ejemplo son bytes de prueba en base64; la app Android los deriva con Argon2id.",
+            "description": "Crea la cuenta sin sesión y envía el código de verificación al correo (o a la consola de la API si no hay RESEND_API_KEY). Guarda el challengeToken.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 65536,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
@@ -195,63 +170,31 @@
           "response": []
         },
         {
-          "name": "Registro duplicado (409)",
+          "name": "Confirmar código de correo",
           "event": [
             {
-              "listen": "test",
+              "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Responde 409 Conflict', () => pm.response.to.have.status(409));"
+                  "if (!pm.collectionVariables.get('emailCode')) {",
+                  "  console.log('Falta la variable emailCode: copia el código del correo o de la consola de la API.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
                 ]
               }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/register",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "register"
-              ]
             },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 65536,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Prelogin - correo existente",
-          "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Devuelve el salt registrado', () => pm.expect(pm.response.json().data.kdf.salt).to.eql(pm.collectionVariables.get('kdfSalt')));"
+                  "",
+                  "const tokens = pm.response.json().data.tokens;",
+                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);",
+                  "pm.collectionVariables.set('emailCode', '');"
                 ]
               }
             }
@@ -265,20 +208,72 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/auth/prelogin",
+              "raw": "{{baseUrl}}/api/auth/email/verify/confirm",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
                 "auth",
-                "prelogin"
+                "email",
+                "verify",
+                "confirm"
               ]
             },
-            "description": "",
+            "description": "Verifica el correo e inicia la sesión. Antes, copia el código recibido en la variable emailCode.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "raw": "{\n  \"challengeToken\": \"{{challengeToken}}\",\n  \"code\": \"{{emailCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reenviar código",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email/verify/resend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email",
+                "verify",
+                "resend"
+              ]
+            },
+            "description": "Envía un código nuevo (mínimo 60 s entre envíos; antes responde 429).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeToken\": \"{{challengeToken}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -300,11 +295,15 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Sin 2FA activo entrega tokens', () => pm.expect(pm.response.json().data.requires2FA).to.eql(false));",
                   "",
-                  "const tokens = pm.response.json().data.tokens;",
-                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                  "const data = pm.response.json().data;",
+                  "if (data.requiresEmailVerification) {",
+                  "  pm.collectionVariables.set('challengeToken', data.challengeToken);",
+                  "  console.log('Correo sin verificar: copia el código en emailCode y ejecuta Confirmar código de correo.');",
+                  "} else if (data.tokens) {",
+                  "  pm.collectionVariables.set('accessToken', data.tokens.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', data.tokens.refreshToken);",
+                  "}"
                 ]
               }
             }
@@ -328,7 +327,7 @@
                 "login"
               ]
             },
-            "description": "",
+            "description": "Con el correo verificado entrega tokens. Sin verificar responde requiresEmailVerification y un challengeToken; en ese caso usa Confirmar código de correo.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
@@ -345,484 +344,16 @@
           "response": []
         },
         {
-          "name": "Login con authHash incorrecto (401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 401', () => pm.response.to.have.status(401));",
-                  "pm.test('Mensaje genérico', () => pm.expect(pm.response.json().message).to.eql('Credenciales inválidas.'));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "login"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"yM/W3eTr8vkABw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqE=\",\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "2. Usuario",
-      "item": [
-        {
-          "name": "Perfil",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const user = pm.response.json().data;",
-                  "pm.test('Perfil sin datos sensibles', () => {",
-                  "  pm.expect(user).to.have.keys('id', 'email', 'displayName', 'emailVerified', 'twoFactorEnabled', 'createdAt');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/users/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "users",
-                "me"
-              ]
-            },
-            "description": ""
-          },
-          "response": []
-        },
-        {
-          "name": "Perfil sin token (401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/users/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "users",
-                "me"
-              ]
-            },
-            "description": "",
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "3. Bóveda",
-      "item": [
-        {
-          "name": "Sync inicial (since=0)",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set('itemId', pm.variables.replaceIn('{{$guid}}'));"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const data = pm.response.json().data;",
-                  "pm.test('Resincronización completa', () => pm.expect(data.fullResync).to.eql(true));",
-                  "pm.collectionVariables.set('revision', data.revision);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync?since=0",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ],
-              "query": [
-                {
-                  "key": "since",
-                  "value": "0"
-                }
-              ]
-            },
-            "description": ""
-          },
-          "response": []
-        },
-        {
-          "name": "Crear elemento",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const data = pm.response.json().data;",
-                  "pm.test('Elemento aplicado con versión 1', () => pm.expect(data.applied[0].version).to.eql(1));",
-                  "pm.test('La revisión avanza', () => pm.expect(data.revision).to.be.above(Number(pm.collectionVariables.get('revision'))));",
-                  "// Cursor tras el alta: el sync incremental debe traer solo la edición posterior",
-                  "pm.collectionVariables.set('revision', data.revision);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 0,\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Editar elemento",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Versión 2', () => pm.expect(pm.response.json().data.applied[0].version).to.eql(2));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 1,\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext2}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Conflicto de versión (409)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 409', () => pm.response.to.have.status(409));",
-                  "const conflict = pm.response.json().details.conflicts[0];",
-                  "pm.test('Informa la versión actual', () => {",
-                  "  pm.expect(conflict.reason).to.eql('version_mismatch');",
-                  "  pm.expect(conflict.currentVersion).to.eql(2);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ]
-            },
-            "description": "Reenvía baseVersion 0 sobre un elemento que ya va en la versión 2. El lote completo se rechaza y la revisión no cambia.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 0,\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Sync incremental",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const data = pm.response.json().data;",
-                  "pm.test('Solo cambios posteriores al cursor', () => {",
-                  "  pm.expect(data.fullResync).to.eql(false);",
-                  "  pm.expect(data.items.map(i => i.id)).to.include(pm.collectionVariables.get('itemId'));",
-                  "});",
-                  "pm.collectionVariables.set('revision', data.revision);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync?since={{revision}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ],
-              "query": [
-                {
-                  "key": "since",
-                  "value": "{{revision}}"
-                }
-              ]
-            },
-            "description": ""
-          },
-          "response": []
-        },
-        {
-          "name": "Borrar elemento",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Versión 3', () => pm.expect(pm.response.json().data.applied[0].version).to.eql(3));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 2,\n      \"deleted\": true\n    }\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Sync tras borrado (tombstone)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const item = pm.response.json().data.items.find(i => i.id === pm.collectionVariables.get('itemId'));",
-                  "pm.test('El borrado llega como tombstone sin ciphertext', () => {",
-                  "  pm.expect(item.deleted).to.eql(true);",
-                  "  pm.expect(item).to.not.have.property('ciphertext');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/vault/sync?since={{revision}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "vault",
-                "sync"
-              ],
-              "query": [
-                {
-                  "key": "since",
-                  "value": "{{revision}}"
-                }
-              ]
-            },
-            "description": ""
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "4. Rotación de sesión",
-      "item": [
-        {
           "name": "Refresh",
           "event": [
             {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set('oldRefreshToken', pm.collectionVariables.get('refreshToken'));"
-                ]
-              }
-            },
-            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "",
                   "const data = pm.response.json().data;",
-                  "pm.test('El refresh token rota', () => pm.expect(data.refreshToken).to.not.eql(pm.collectionVariables.get('oldRefreshToken')));",
                   "pm.collectionVariables.set('accessToken', data.accessToken);",
                   "pm.collectionVariables.set('refreshToken', data.refreshToken);"
                 ]
@@ -848,7 +379,7 @@
                 "refresh"
               ]
             },
-            "description": "",
+            "description": "Renueva el access token. El refresh token rota en cada uso; si se reutiliza uno viejo, la sesión se revoca.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
@@ -861,227 +392,6 @@
             "auth": {
               "type": "noauth"
             }
-          },
-          "response": []
-        },
-        {
-          "name": "Refresh reutilizado (401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/refresh",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "refresh"
-              ]
-            },
-            "description": "Presentar un refresh token ya rotado se trata como robo: la sesión se revoca.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"refreshToken\": \"{{oldRefreshToken}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Perfil con sesión revocada (401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('El access token de la sesión revocada deja de servir', () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/users/me",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "users",
-                "me"
-              ]
-            },
-            "description": ""
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "5. Auditoría y logout",
-      "item": [
-        {
-          "name": "Login",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const tokens = pm.response.json().data.tokens;",
-                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "login"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Historial de auditoría",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const items = pm.response.json().data.items;",
-                  "const events = items.map(i => `${i.eventType}:${i.outcome}`);",
-                  "pm.test('Registra los eventos de seguridad de la corrida', () => {",
-                  "  ['auth.register:success', 'auth.login:success', 'auth.login:failure',",
-                  "   'vault.sync_push:success', 'vault.sync_conflict:failure', 'auth.refresh_reuse:failure']",
-                  "    .forEach(e => pm.expect(events).to.include(e));",
-                  "});",
-                  "pm.test('Del más reciente al más viejo', () => pm.expect(items[0].id).to.be.above(items[items.length - 1].id));",
-                  "pm.test('Incluye IP y dispositivo, sin secretos en metadata', () => {",
-                  "  const login = items.find(i => i.eventType === 'auth.login' && i.outcome === 'success');",
-                  "  pm.expect(login.ip).to.be.a('string');",
-                  "  pm.expect(login.deviceName).to.eql('Postman');",
-                  "  pm.expect(JSON.stringify(items)).to.not.include(pm.collectionVariables.get('authHash'));",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/audit?limit=50",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "audit"
-              ],
-              "query": [
-                {
-                  "key": "limit",
-                  "value": "50"
-                }
-              ]
-            },
-            "description": "Historial de seguridad de la cuenta. Paginación con ?before=<nextCursor>."
-          },
-          "response": []
-        },
-        {
-          "name": "Verificar cadena de auditoría",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const report = pm.response.json().data;",
-                  "pm.test('La cadena de HMAC está íntegra', () => {",
-                  "  pm.expect(report.valid).to.eql(true);",
-                  "  pm.expect(report.checkedEntries).to.be.at.least(9);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/audit/verify",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "audit",
-                "verify"
-              ]
-            },
-            "description": "Recalcula el HMAC de cada evento y su enlace con el anterior. Si alguien edita o borra filas de audit_log, responde valid: false con el primer id alterado."
           },
           "response": []
         },
@@ -1112,19 +422,24 @@
                 "logout"
               ]
             },
-            "description": ""
+            "description": "Cierra la sesión actual. Ejecútalo al final: después, el access token deja de servir."
           },
           "response": []
-        },
+        }
+      ]
+    },
+    {
+      "name": "Usuario",
+      "item": [
         {
-          "name": "Perfil tras logout (401)",
+          "name": "Perfil",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -1143,226 +458,17 @@
                 "me"
               ]
             },
-            "description": ""
+            "description": "Perfil de la cuenta autenticada."
           },
           "response": []
         }
       ]
     },
     {
-      "name": "6. Validación y seguridad",
+      "name": "Bóveda",
       "item": [
         {
-          "name": "Mass assignment (400)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Rechaza propiedades no declaradas', () => pm.response.to.have.status(400));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "login"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\",\n  \"isAdmin\": true\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "KDF débil (400)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Rechaza parámetros Argon2id bajo el mínimo OWASP', () => pm.response.to.have.status(400));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/register",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "register"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"debil@endsecurity.test\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 1024,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "authHash no base64 (400)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Rechaza material criptográfico mal codificado', () => pm.response.to.have.status(400));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "login"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"no-es-base64!\",\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "7. Correo (manual)",
-      "item": [
-        {
-          "name": "Preparar cuenta",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Esta carpeta funciona sola: crea su propia cuenta (o usa fixedEmail si ya la registraste)",
-                  "const fixed = pm.collectionVariables.get('fixedEmail');",
-                  "pm.collectionVariables.set('email', fixed || `qa+correo${Date.now()}@endsecurity.test`);",
-                  "pm.collectionVariables.set('newEmail', '');"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Cuenta creada (201) o ya existente con fixedEmail (409)', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/register",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "register"
-              ]
-            },
-            "description": "Crea la cuenta para las pruebas de correo. Con fixedEmail ya registrado responde 409 y se sigue con el login.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 65536,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Login",
+          "name": "Descargar cambios",
           "event": [
             {
               "listen": "test",
@@ -1370,180 +476,46 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const tokens = pm.response.json().data.tokens;",
-                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                  "pm.collectionVariables.set('revision', pm.response.json().data.revision);"
                 ]
               }
             }
           ],
           "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "login"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Solicitar código de verificación",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 202', () => pm.response.to.have.status(202));",
-                  "const data = pm.response.json().data;",
-                  "pm.test('Destino enmascarado y cooldown', () => {",
-                  "  pm.expect(data.sentTo).to.include('***@');",
-                  "  pm.expect(data.resendAvailableInSeconds).to.eql(60);",
-                  "});",
-                  "pm.collectionVariables.set('emailCode', '');"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
+            "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/auth/email/verify/request",
+              "raw": "{{baseUrl}}/api/vault/sync?since={{revision}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "auth",
-                "email",
-                "verify",
-                "request"
-              ]
-            },
-            "description": "Envía un código de 6 dígitos al correo de la cuenta. Sin RESEND_API_KEY aparece en la consola de la API ([MailDev])."
-          },
-          "response": []
-        },
-        {
-          "name": "Reenviar antes de 60 s (429)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 429', () => pm.response.to.have.status(429));",
-                  "pm.test('Indica cuánto esperar', () => pm.expect(pm.response.json().details.retryAfterSeconds).to.be.above(0));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/email/verify/request",
-              "host": [
-                "{{baseUrl}}"
+                "vault",
+                "sync"
               ],
-              "path": [
-                "api",
-                "auth",
-                "email",
-                "verify",
-                "request"
-              ]
-            },
-            "description": ""
-          },
-          "response": []
-        },
-        {
-          "name": "Confirmar con código incorrecto (400)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 400', () => pm.response.to.have.status(400));",
-                  "pm.test('Descuenta un intento', () => pm.expect(pm.response.json().details.remainingAttempts).to.eql(4));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/email/verify/confirm",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "email",
-                "verify",
-                "confirm"
-              ]
-            },
-            "description": "Hay una probabilidad de 1 en un millón de que 000000 sea el código real.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"code\": \"000000\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
+              "query": [
+                {
+                  "key": "since",
+                  "value": "{{revision}}"
                 }
-              }
-            }
+              ]
+            },
+            "description": "Elementos cambiados después de la revisión since (0 = bóveda completa). Guarda la revisión actual."
           },
           "response": []
         },
         {
-          "name": "Confirmar verificación",
+          "name": "Enviar cambios",
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if (!pm.collectionVariables.get('emailCode')) {",
-                  "  console.log('Falta {{emailCode}}: copia el código del correo o de la consola de la API.');",
-                  "  pm.execution.skipRequest();",
+                  "if (!pm.collectionVariables.get('itemId')) {",
+                  "  pm.collectionVariables.set('itemId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('itemVersion', '0');",
                   "}"
                 ]
               }
@@ -1554,7 +526,10 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Correo verificado', () => pm.expect(pm.response.json().data.emailVerified).to.eql(true));"
+                  "",
+                  "const data = pm.response.json().data;",
+                  "pm.collectionVariables.set('itemVersion', String(data.applied[0].version));",
+                  "pm.collectionVariables.set('revision', data.revision);"
                 ]
               }
             }
@@ -1568,22 +543,20 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/auth/email/verify/confirm",
+              "raw": "{{baseUrl}}/api/vault/sync",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "auth",
-                "email",
-                "verify",
-                "confirm"
+                "vault",
+                "sync"
               ]
             },
-            "description": "Antes de enviarla, pon el código recibido en la variable emailCode. Si está vacía, Postman la salta.",
+            "description": "Crea o edita un elemento cifrado. La primera vez usa baseVersion 0 (alta); después la colección guarda la versión y cada envío es una edición. Para borrarlo, cambia el cuerpo a { \"id\", \"baseVersion\", \"deleted\": true }.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"{{emailCode}}\"\n}",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": {{itemVersion}},\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1592,89 +565,87 @@
             }
           },
           "response": []
-        },
+        }
+      ]
+    },
+    {
+      "name": "Auditoría",
+      "item": [
         {
-          "name": "Solicitar verificación ya verificada (409)",
+          "name": "Historial",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Responde 409', () => pm.response.to.have.status(409));"
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
           ],
           "request": {
-            "method": "POST",
+            "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/auth/email/verify/request",
+              "raw": "{{baseUrl}}/api/audit?limit=50",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "auth",
-                "email",
-                "verify",
-                "request"
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
               ]
             },
-            "description": ""
+            "description": "Eventos de seguridad de la cuenta, del más reciente al más viejo. Página siguiente: ?before=<nextCursor>."
           },
           "response": []
         },
         {
-          "name": "Cambio de correo con contraseña incorrecta (403)",
+          "name": "Verificar cadena",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Responde 403 sin cerrar la sesión', () => pm.response.to.have.status(403));"
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Cadena íntegra', () => pm.expect(pm.response.json().data.valid).to.eql(true));"
                 ]
               }
             }
           ],
           "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "method": "GET",
+            "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/auth/email/change/request",
+              "raw": "{{baseUrl}}/api/audit/verify",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "api",
-                "auth",
-                "email",
-                "change",
-                "request"
+                "audit",
+                "verify"
               ]
             },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"newEmail\": \"otro@endsecurity.test\",\n  \"authHash\": \"yM/W3eTr8vkABw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqE=\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
+            "description": "Recalcula la cadena de HMAC. valid: false indica que alguien alteró o borró filas de audit_log."
           },
           "response": []
-        },
+        }
+      ]
+    },
+    {
+      "name": "Cambio de correo",
+      "item": [
         {
-          "name": "Solicitar cambio de correo",
+          "name": "Solicitar cambio",
           "event": [
             {
               "listen": "prerequest",
@@ -1719,7 +690,7 @@
                 "request"
               ]
             },
-            "description": "El código llega al correo NUEVO. Para recibirlo con Resend, pon una dirección real en newEmail (requiere dominio verificado en Resend).",
+            "description": "Pide la contraseña maestra (authHash) y envía un código al correo nuevo. Con Resend sin dominio verificado, pruébalo en modo consola.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"newEmail\": \"{{newEmail}}\",\n  \"authHash\": \"{{authHash}}\"\n}",
@@ -1733,7 +704,7 @@
           "response": []
         },
         {
-          "name": "Confirmar cambio de correo",
+          "name": "Confirmar cambio",
           "event": [
             {
               "listen": "prerequest",
@@ -1741,7 +712,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (!pm.collectionVariables.get('emailChangeCode')) {",
-                  "  console.log('Falta {{emailChangeCode}}: copia el código del correo o de la consola de la API.');",
+                  "  console.log('Falta la variable emailChangeCode: copia el código que llegó al correo nuevo o a la consola.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -1753,13 +724,10 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const user = pm.response.json().data;",
-                  "pm.test('El correo cambió y quedó verificado', () => {",
-                  "  pm.expect(user.email).to.eql(pm.collectionVariables.get('newEmail'));",
-                  "  pm.expect(user.emailVerified).to.eql(true);",
-                  "});",
-                  "pm.collectionVariables.set('email', user.email);",
-                  "pm.collectionVariables.set('newEmail', '');"
+                  "",
+                  "pm.collectionVariables.set('email', pm.response.json().data.email);",
+                  "pm.collectionVariables.set('newEmail', '');",
+                  "pm.collectionVariables.set('emailChangeCode', '');"
                 ]
               }
             }
@@ -1785,7 +753,7 @@
                 "confirm"
               ]
             },
-            "description": "",
+            "description": "Cambia el correo y cierra las demás sesiones. Antes, copia el código en la variable emailChangeCode.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"code\": \"{{emailChangeCode}}\"\n}",
@@ -1794,57 +762,6 @@
                   "language": "json"
                 }
               }
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Login con el correo nuevo",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
-                  "const tokens = pm.response.json().data.tokens;",
-                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
-                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "auth",
-                "login"
-              ]
-            },
-            "description": "",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "auth": {
-              "type": "noauth"
             }
           },
           "response": []
@@ -1860,31 +777,6 @@
     },
     {
       "key": "email",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "unknownEmail",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "fixedEmail",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "emailCode",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "newEmail",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "emailChangeCode",
       "value": "",
       "type": "string"
     },
@@ -1909,28 +801,13 @@
       "type": "string"
     },
     {
-      "key": "itemNonce",
-      "value": "NTxDSlFYX2ZtdHuC",
-      "type": "string"
-    },
-    {
-      "key": "itemCiphertext",
-      "value": "PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz+gEIDxYdJCsyOUBHTlVcY2pxeH+GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2Y=",
-      "type": "string"
-    },
-    {
-      "key": "itemCiphertext2",
-      "value": "R05VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6/L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng",
-      "type": "string"
-    },
-    {
-      "key": "itemId",
+      "key": "challengeToken",
       "value": "",
       "type": "string"
     },
     {
-      "key": "revision",
-      "value": "0",
+      "key": "emailCode",
+      "value": "",
       "type": "string"
     },
     {
@@ -1944,7 +821,37 @@
       "type": "string"
     },
     {
-      "key": "oldRefreshToken",
+      "key": "revision",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "itemId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "itemVersion",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "itemNonce",
+      "value": "NTxDSlFYX2ZtdHuC",
+      "type": "string"
+    },
+    {
+      "key": "itemCiphertext",
+      "value": "PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz+gEIDxYdJCsyOUBHTlVcY2pxeH+GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2Y=",
+      "type": "string"
+    },
+    {
+      "key": "newEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "emailChangeCode",
       "value": "",
       "type": "string"
     }

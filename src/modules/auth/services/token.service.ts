@@ -1,9 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { parseDurationMs } from '../../../common/utils';
-import { TokenType, TWO_FACTOR_CHALLENGE_TTL_SECONDS } from '../auth.constants';
+import {
+  EMAIL_CHALLENGE_TTL_SECONDS,
+  TokenType,
+  TWO_FACTOR_CHALLENGE_TTL_SECONDS,
+} from '../auth.constants';
+
+export interface ChallengeClaims {
+  userId: string;
+  deviceName: string;
+}
 
 const REFRESH_TOKEN_PATTERN = /^([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/;
 
@@ -49,6 +58,35 @@ export class TokenService {
     );
   }
 
+  signEmailVerificationChallenge(userId: string, deviceName: string): string {
+    return this.jwtService.sign(
+      { sub: userId, typ: TokenType.EmailVerificationPending, dn: deviceName },
+      { expiresIn: EMAIL_CHALLENGE_TTL_SECONDS },
+    );
+  }
+
+  /**
+   * Valida un token de desafío (correo pendiente o 2FA) del tipo esperado.
+   * Un access token o un desafío de otro tipo se rechazan.
+   */
+  verifyChallenge(token: string, expected: TokenType): ChallengeClaims {
+    try {
+      const payload = this.jwtService.verify<{
+        sub?: string;
+        typ?: string;
+        dn?: string;
+      }>(token);
+      if (payload.typ === expected && payload.sub && payload.dn) {
+        return { userId: payload.sub, deviceName: payload.dn };
+      }
+    } catch {
+      // firma inválida o vencido: mismo mensaje
+    }
+    throw new UnauthorizedException(
+      'El desafío no es válido o ya venció. Inicia sesión de nuevo.',
+    );
+  }
+
   generateRefreshSecret(): string {
     return randomBytes(32).toString('base64url');
   }
@@ -66,14 +104,6 @@ export class TokenService {
 
   hashRefreshSecret(secret: string): Uint8Array<ArrayBuffer> {
     return this.hmac(`refresh:${secret}`);
-  }
-
-  /**
-   * HMAC de un código de verificación de correo, ligado a su registro. Con el
-   * pepper del servidor, un volcado de la BD no permite probar los 10^6 códigos.
-   */
-  hashEmailCode(verificationId: string, code: string): Uint8Array<ArrayBuffer> {
-    return this.hmac(`email-code:${verificationId}:${code}`);
   }
 
   /** Salt determinista para correos inexistentes en /auth/prelogin. */
