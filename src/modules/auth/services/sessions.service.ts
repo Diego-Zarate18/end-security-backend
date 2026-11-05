@@ -1,7 +1,10 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import type { ClientInfoData } from '../../../common/decorators';
 import { PrismaService } from '../../../database/prisma.service';
+import { AuditEvent } from '../../audit/audit.constants';
+import { AuditService } from '../../audit/services';
 import { TokenPairDto } from '../dto';
 import { TokenService } from './token.service';
 
@@ -11,6 +14,11 @@ export type SessionRevokeReason =
   | 'revoked_by_user'
   | 'password_change'
   | 'account_deleted';
+
+export interface CreatedSession {
+  sessionId: string;
+  tokens: TokenPairDto;
+}
 
 const invalidRefresh = () =>
   new UnauthorizedException('Refresh token inválido o expirado.');
@@ -24,13 +32,14 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tokens: TokenService,
+    private readonly auditService: AuditService,
   ) {}
 
   async create(
     userId: string,
     deviceName: string,
     tx: Prisma.TransactionClient = this.prisma,
-  ): Promise<TokenPairDto> {
+  ): Promise<CreatedSession> {
     const sessionId = randomUUID();
     const secret = this.tokens.generateRefreshSecret();
     const now = new Date();
@@ -46,10 +55,13 @@ export class SessionsService {
       },
     });
 
-    return this.issue(userId, sessionId, secret);
+    return { sessionId, tokens: this.issue(userId, sessionId, secret) };
   }
 
-  async rotate(refreshToken: string): Promise<TokenPairDto> {
+  async rotate(
+    refreshToken: string,
+    client: ClientInfoData,
+  ): Promise<TokenPairDto> {
     const parsed = this.tokens.parseRefreshToken(refreshToken);
     if (!parsed) throw invalidRefresh();
 
@@ -69,6 +81,14 @@ export class SessionsService {
       this.tokens.safeEqual(presented, session.previous_refresh_token_hash)
     ) {
       await this.revoke(session.id, 'refresh_token_reuse');
+      await this.auditService.recordSafely({
+        userId: session.user_id,
+        sessionId: session.id,
+        event: AuditEvent.AuthRefreshReuse,
+        outcome: 'failure',
+        metadata: { action: 'session_revoked' },
+        client,
+      });
       throw invalidRefresh();
     }
 

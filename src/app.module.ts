@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './database/prisma.module';
+import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards';
 import { UsersModule } from './modules/users/users.module';
@@ -20,6 +21,7 @@ import { VaultModule } from './modules/vault/vault.module';
     UsersModule,
     AuthModule,
     VaultModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [

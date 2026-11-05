@@ -1,13 +1,17 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { randomBytes } from 'crypto';
+import type { ClientInfoData } from '../../common/decorators';
 import { fromBase64, toBase64 } from '../../common/utils';
 import { PrismaService } from '../../database/prisma.service';
+import { AuditEvent } from '../audit/audit.constants';
+import { AuditService } from '../audit/services';
 import { UsersService, UserWithTwoFactor } from '../users/users.service';
 import { DEFAULT_KDF_PARAMS, SERVER_ARGON2_OPTIONS } from './auth.constants';
 import {
@@ -28,6 +32,7 @@ const invalidCredentials = () =>
 
 @Injectable()
 export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
   /** Hash señuelo para igualar el tiempo de respuesta cuando el correo no existe. */
   private dummyHash = '';
 
@@ -36,6 +41,7 @@ export class AuthService implements OnModuleInit {
     private readonly usersService: UsersService,
     private readonly sessionsService: SessionsService,
     private readonly tokenService: TokenService,
+    private readonly auditService: AuditService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -60,7 +66,10 @@ export class AuthService implements OnModuleInit {
     return { kdf: this.kdfOf(user) };
   }
 
-  async register(dto: RegisterDto): Promise<AuthResponseDto> {
+  async register(
+    dto: RegisterDto,
+    client: ClientInfoData,
+  ): Promise<AuthResponseDto> {
     const existing = await this.usersService.findByEmail(dto.email);
     if (existing) {
       throw new ConflictException(
@@ -89,21 +98,39 @@ export class AuthService implements OnModuleInit {
         },
         tx,
       );
-      const tokens = await this.sessionsService.create(
+      const { sessionId, tokens } = await this.sessionsService.create(
         user.id,
         dto.deviceName,
+        tx,
+      );
+      await this.auditService.record(
+        {
+          userId: user.id,
+          sessionId,
+          event: AuditEvent.AuthRegister,
+          outcome: 'success',
+          metadata: { deviceName: dto.deviceName },
+          client,
+        },
         tx,
       );
       return this.buildAuthResponse(user, tokens);
     });
   }
 
-  async login(dto: LoginDto): Promise<AuthResponseDto | TwoFactorChallengeDto> {
+  async login(
+    dto: LoginDto,
+    client: ClientInfoData,
+  ): Promise<AuthResponseDto | TwoFactorChallengeDto> {
     const user = await this.usersService.findActiveByEmail(dto.email);
     const presented = Buffer.from(fromBase64(dto.authHash));
 
     if (!user) {
       await argon2.verify(this.dummyHash, presented).catch(() => false);
+      // Sin user_id no hay cadena donde registrarlo: solo log del servidor, sin el correo
+      this.logger.warn(
+        `[auth.login] intento con correo inexistente desde ${client.ipAddress}`,
+      );
       throw invalidCredentials();
     }
 
@@ -111,10 +138,24 @@ export class AuthService implements OnModuleInit {
       .verify(user.auth_hash, presented)
       .catch(() => false);
     if (!isMatch) {
+      await this.auditService.recordSafely({
+        userId: user.id,
+        event: AuditEvent.AuthLogin,
+        outcome: 'failure',
+        metadata: { reason: 'invalid_credentials', deviceName: dto.deviceName },
+        client,
+      });
       throw invalidCredentials();
     }
 
     if (user.two_factor?.status === 'active') {
+      await this.auditService.record({
+        userId: user.id,
+        event: AuditEvent.AuthTwoFactorChallenge,
+        outcome: 'success',
+        metadata: { deviceName: dto.deviceName },
+        client,
+      });
       return {
         requires2FA: true,
         challengeToken: this.tokenService.signTwoFactorChallenge(
@@ -124,16 +165,45 @@ export class AuthService implements OnModuleInit {
       };
     }
 
-    const tokens = await this.sessionsService.create(user.id, dto.deviceName);
+    const tokens = await this.prisma.$transaction(async (tx) => {
+      const created = await this.sessionsService.create(
+        user.id,
+        dto.deviceName,
+        tx,
+      );
+      await this.auditService.record(
+        {
+          userId: user.id,
+          sessionId: created.sessionId,
+          event: AuditEvent.AuthLogin,
+          outcome: 'success',
+          metadata: { deviceName: dto.deviceName },
+          client,
+        },
+        tx,
+      );
+      return created.tokens;
+    });
     return this.buildAuthResponse(user, tokens);
   }
 
-  refresh(refreshToken: string): Promise<TokenPairDto> {
-    return this.sessionsService.rotate(refreshToken);
+  refresh(refreshToken: string, client: ClientInfoData): Promise<TokenPairDto> {
+    return this.sessionsService.rotate(refreshToken, client);
   }
 
-  logout(userId: string, sessionId: string): Promise<void> {
-    return this.sessionsService.revoke(sessionId, 'logout', userId);
+  async logout(
+    userId: string,
+    sessionId: string,
+    client: ClientInfoData,
+  ): Promise<void> {
+    await this.sessionsService.revoke(sessionId, 'logout', userId);
+    await this.auditService.record({
+      userId,
+      sessionId,
+      event: AuditEvent.AuthLogout,
+      outcome: 'success',
+      client,
+    });
   }
 
   /** Usado también por el módulo 2FA al completar el desafío TOTP. */

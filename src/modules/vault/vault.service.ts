@@ -5,8 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { vault_items } from '@prisma/client';
+import type { ClientInfoData } from '../../common/decorators';
 import { bigintToNumber, fromBase64, toBase64 } from '../../common/utils';
 import { PrismaService } from '../../database/prisma.service';
+import { AuditEvent } from '../audit/audit.constants';
+import { AuditService } from '../audit/services';
 import {
   PushVaultChangesDto,
   VaultConflictDto,
@@ -25,9 +28,14 @@ import {
  *   dispositivos se enteren; se purgan después y se registra el límite en
  *   `users.purged_through_revision`.
  */
+type VaultChange = PushVaultChangesDto['items'][number] & { id: string };
+
 @Injectable()
 export class VaultService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+  ) {}
 
   async getChanges(
     userId: string,
@@ -66,7 +74,9 @@ export class VaultService {
 
   async pushChanges(
     userId: string,
+    sessionId: string,
     dto: PushVaultChangesDto,
+    client: ClientInfoData,
   ): Promise<VaultPushResponseDto> {
     const changes = dto.items.map((item) => ({
       ...item,
@@ -79,6 +89,32 @@ export class VaultService {
       );
     }
 
+    try {
+      return await this.applyChanges(userId, sessionId, changes, client);
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        await this.auditService.recordSafely({
+          userId,
+          sessionId,
+          event: AuditEvent.VaultSyncConflict,
+          outcome: 'failure',
+          metadata: {
+            items: changes.length,
+            conflicts: this.conflictCount(error),
+          },
+          client,
+        });
+      }
+      throw error;
+    }
+  }
+
+  private applyChanges(
+    userId: string,
+    sessionId: string,
+    changes: VaultChange[],
+    client: ClientInfoData,
+  ): Promise<VaultPushResponseDto> {
     return this.prisma.$transaction(async (tx) => {
       // El UPDATE bloquea la fila del usuario y serializa lotes concurrentes
       const user = await tx.users.update({
@@ -92,7 +128,7 @@ export class VaultService {
       const revision = user.vault_revision;
 
       const existing = await tx.vault_items.findMany({
-        where: { id: { in: ids } },
+        where: { id: { in: changes.map((c) => c.id) } },
         select: { id: true, user_id: true, version: true },
       });
       const byId = new Map(existing.map((e) => [e.id, e]));
@@ -178,8 +214,36 @@ export class VaultService {
         });
       }
 
+      const deleted = changes.filter((c) => c.deleted).length;
+      const created = changes.filter(
+        (c) => !c.deleted && !byId.has(c.id),
+      ).length;
+      await this.auditService.record(
+        {
+          userId,
+          sessionId,
+          event: AuditEvent.VaultSyncPush,
+          outcome: 'success',
+          metadata: {
+            revision: bigintToNumber(revision),
+            created,
+            updated: changes.length - created - deleted,
+            deleted,
+          },
+          client,
+        },
+        tx,
+      );
+
       return { revision: bigintToNumber(revision), applied };
     });
+  }
+
+  private conflictCount(error: ConflictException): number {
+    const body = error.getResponse() as {
+      details?: { conflicts?: unknown[] };
+    };
+    return body.details?.conflicts?.length ?? 0;
   }
 
   private toItemDto(item: vault_items): VaultItemDto {

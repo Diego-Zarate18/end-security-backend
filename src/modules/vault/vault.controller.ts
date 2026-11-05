@@ -7,7 +7,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { CurrentUser } from '../../common/decorators';
+import {
+  ClientInfo,
+  type ClientInfoData,
+  CurrentUser,
+} from '../../common/decorators';
+import type { AuthenticatedUser } from '../auth/strategies';
 import {
   PushVaultChangesDto,
   SyncQueryDto,
@@ -33,9 +38,10 @@ export class VaultController {
   @HttpCode(HttpStatus.OK)
   @Post('sync')
   pushChanges(
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Body() dto: PushVaultChangesDto,
+    @ClientInfo() client: ClientInfoData,
   ): Promise<VaultPushResponseDto> {
-    return this.vaultService.pushChanges(userId, dto);
+    return this.vaultService.pushChanges(user.id, user.sessionId, dto, client);
   }
 }

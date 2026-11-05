@@ -2,9 +2,1301 @@
   "info": {
     "_postman_id": "a91e532b-67df-485a-93f9-7157a5eb23b0",
     "name": "End Security - Backend API",
-    "description": "Colección de pruebas para el backend de End Security (Zero-Knowledge Password Manager)",
+    "description": "Pruebas del backend de End Security (gestor de contraseñas Zero-Knowledge).\n\nEjecuta la colección completa con el Runner, en orden: cada ejecución crea una cuenta nueva. Una ejecución completa hace 13 peticiones a /api/auth, que por defecto acepta 10 por minuto (AUTH_THROTTLE_LIMIT). Para correrla de una vez, sube AUTH_THROTTLE_LIMIT a 30 en tu .env local o pon un retraso de 5000 ms en el Runner.\n\nLos valores criptográficos son bytes de prueba en base64. La app Android los obtiene con Argon2id y AES-256-GCM.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "0. Salud",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Base de datos conectada', () => pm.expect(pm.response.json().data.database).to.eql('connected'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "health"
+              ]
+            },
+            "description": "Comprueba que la API y PostgreSQL responden. No requiere token.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Registro y sesión",
+      "item": [
+        {
+          "name": "Prelogin - correo inexistente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('unknownEmail', `noexiste+${Date.now()}@endsecurity.test`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const kdf = pm.response.json().data.kdf;",
+                  "pm.test('Devuelve parámetros KDF por defecto (no revela que la cuenta no existe)', () => {",
+                  "  pm.expect(kdf.memoryKib).to.eql(65536);",
+                  "  pm.expect(kdf.iterations).to.eql(3);",
+                  "  pm.expect(kdf.parallelism).to.eql(4);",
+                  "  pm.expect(kdf.salt).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/prelogin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "prelogin"
+              ]
+            },
+            "description": "Para un correo que no existe responde con parámetros por defecto y un salt determinista, igual que para una cuenta real.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{unknownEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Registro",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cuenta nueva: solo esta petición cambia {{email}}; el resto reutiliza la cuenta registrada",
+                  "pm.collectionVariables.set('email', `qa+${Date.now()}@endsecurity.test`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 201', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('Incluye tokens, perfil y llaves', () => {",
+                  "  pm.expect(data.requires2FA).to.eql(false);",
+                  "  pm.expect(data.tokens.accessToken).to.be.a('string');",
+                  "  pm.expect(data.tokens.refreshToken).to.match(/^[0-9a-f-]{36}\\./);",
+                  "  pm.expect(data.user.email).to.eql(pm.collectionVariables.get('email'));",
+                  "  pm.expect(data.keys.pvk.ciphertext).to.eql(pm.collectionVariables.get('pvkCiphertext'));",
+                  "});",
+                  "",
+                  "const tokens = pm.response.json().data.tokens;",
+                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Registra la cuenta con el auth key, los parámetros KDF y la clave de bóveda cifrada (PVK). Los valores de ejemplo son bytes de prueba en base64; la app Android los deriva con Argon2id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 65536,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Registro duplicado (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 409 Conflict', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 65536,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Prelogin - correo existente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve el salt registrado', () => pm.expect(pm.response.json().data.kdf.salt).to.eql(pm.collectionVariables.get('kdfSalt')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/prelogin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "prelogin"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Sin 2FA activo entrega tokens', () => pm.expect(pm.response.json().data.requires2FA).to.eql(false));",
+                  "",
+                  "const tokens = pm.response.json().data.tokens;",
+                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login con authHash incorrecto (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Mensaje genérico', () => pm.expect(pm.response.json().message).to.eql('Credenciales inválidas.'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"yM/W3eTr8vkABw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqE=\",\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Usuario",
+      "item": [
+        {
+          "name": "Perfil",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const user = pm.response.json().data;",
+                  "pm.test('Perfil sin datos sensibles', () => {",
+                  "  pm.expect(user).to.have.keys('id', 'email', 'displayName', 'emailVerified', 'twoFactorEnabled', 'createdAt');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Perfil sin token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Bóveda",
+      "item": [
+        {
+          "name": "Sync inicial (since=0)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('itemId', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('Resincronización completa', () => pm.expect(data.fullResync).to.eql(true));",
+                  "pm.collectionVariables.set('revision', data.revision);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync?since=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Crear elemento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('Elemento aplicado con versión 1', () => pm.expect(data.applied[0].version).to.eql(1));",
+                  "pm.test('La revisión avanza', () => pm.expect(data.revision).to.be.above(Number(pm.collectionVariables.get('revision'))));",
+                  "// Cursor tras el alta: el sync incremental debe traer solo la edición posterior",
+                  "pm.collectionVariables.set('revision', data.revision);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 0,\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Editar elemento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Versión 2', () => pm.expect(pm.response.json().data.applied[0].version).to.eql(2));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 1,\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext2}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Conflicto de versión (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 409', () => pm.response.to.have.status(409));",
+                  "const conflict = pm.response.json().details.conflicts[0];",
+                  "pm.test('Informa la versión actual', () => {",
+                  "  pm.expect(conflict.reason).to.eql('version_mismatch');",
+                  "  pm.expect(conflict.currentVersion).to.eql(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ]
+            },
+            "description": "Reenvía baseVersion 0 sobre un elemento que ya va en la versión 2. El lote completo se rechaza y la revisión no cambia.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 0,\n      \"nonce\": \"{{itemNonce}}\",\n      \"ciphertext\": \"{{itemCiphertext}}\",\n      \"formatVersion\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Sync incremental",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('Solo cambios posteriores al cursor', () => {",
+                  "  pm.expect(data.fullResync).to.eql(false);",
+                  "  pm.expect(data.items.map(i => i.id)).to.include(pm.collectionVariables.get('itemId'));",
+                  "});",
+                  "pm.collectionVariables.set('revision', data.revision);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync?since={{revision}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "{{revision}}"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Borrar elemento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Versión 3', () => pm.expect(pm.response.json().data.applied[0].version).to.eql(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"id\": \"{{itemId}}\",\n      \"baseVersion\": 2,\n      \"deleted\": true\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Sync tras borrado (tombstone)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const item = pm.response.json().data.items.find(i => i.id === pm.collectionVariables.get('itemId'));",
+                  "pm.test('El borrado llega como tombstone sin ciphertext', () => {",
+                  "  pm.expect(item.deleted).to.eql(true);",
+                  "  pm.expect(item).to.not.have.property('ciphertext');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/vault/sync?since={{revision}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "sync"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "{{revision}}"
+                }
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Rotación de sesión",
+      "item": [
+        {
+          "name": "Refresh",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('oldRefreshToken', pm.collectionVariables.get('refreshToken'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('El refresh token rota', () => pm.expect(data.refreshToken).to.not.eql(pm.collectionVariables.get('oldRefreshToken')));",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh reutilizado (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Presentar un refresh token ya rotado se trata como robo: la sesión se revoca.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{oldRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Perfil con sesión revocada (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('El access token de la sesión revocada deja de servir', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Auditoría y logout",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const tokens = pm.response.json().data.tokens;",
+                  "pm.collectionVariables.set('accessToken', tokens.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Historial de auditoría",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().data.items;",
+                  "const events = items.map(i => `${i.eventType}:${i.outcome}`);",
+                  "pm.test('Registra los eventos de seguridad de la corrida', () => {",
+                  "  ['auth.register:success', 'auth.login:success', 'auth.login:failure',",
+                  "   'vault.sync_push:success', 'vault.sync_conflict:failure', 'auth.refresh_reuse:failure']",
+                  "    .forEach(e => pm.expect(events).to.include(e));",
+                  "});",
+                  "pm.test('Del más reciente al más viejo', () => pm.expect(items[0].id).to.be.above(items[items.length - 1].id));",
+                  "pm.test('Incluye IP y dispositivo, sin secretos en metadata', () => {",
+                  "  const login = items.find(i => i.eventType === 'auth.login' && i.outcome === 'success');",
+                  "  pm.expect(login.ip).to.be.a('string');",
+                  "  pm.expect(login.deviceName).to.eql('Postman');",
+                  "  pm.expect(JSON.stringify(items)).to.not.include(pm.collectionVariables.get('authHash'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/audit?limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Historial de seguridad de la cuenta. Paginación con ?before=<nextCursor>."
+          },
+          "response": []
+        },
+        {
+          "name": "Verificar cadena de auditoría",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 200', () => pm.response.to.have.status(200));",
+                  "const report = pm.response.json().data;",
+                  "pm.test('La cadena de HMAC está íntegra', () => {",
+                  "  pm.expect(report.valid).to.eql(true);",
+                  "  pm.expect(report.checkedEntries).to.be.at.least(9);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/audit/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "audit",
+                "verify"
+              ]
+            },
+            "description": "Recalcula el HMAC de cada evento y su enlace con el anterior. Si alguien edita o borra filas de audit_log, responde valid: false con el primer id alterado."
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Perfil tras logout (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Responde 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Validación y seguridad",
+      "item": [
+        {
+          "name": "Mass assignment (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Rechaza propiedades no declaradas', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"{{authHash}}\",\n  \"deviceName\": \"Postman\",\n  \"isAdmin\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "KDF débil (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Rechaza parámetros Argon2id bajo el mínimo OWASP', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"debil@endsecurity.test\",\n  \"displayName\": \"Diego Pruebas\",\n  \"authHash\": \"{{authHash}}\",\n  \"kdf\": {\n    \"salt\": \"{{kdfSalt}}\",\n    \"memoryKib\": 1024,\n    \"iterations\": 3,\n    \"parallelism\": 4\n  },\n  \"pvk\": {\n    \"ciphertext\": \"{{pvkCiphertext}}\",\n    \"nonce\": \"{{pvkNonce}}\"\n  },\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "authHash no base64 (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Rechaza material criptográfico mal codificado', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"authHash\": \"no-es-base64!\",\n  \"deviceName\": \"Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
   "variable": [
     {
       "key": "baseUrl",
@@ -12,284 +1304,74 @@
       "type": "string"
     },
     {
-      "key": "token",
+      "key": "email",
       "value": "",
       "type": "string"
-    }
-  ],
-  "item": [
-    {
-      "name": "0. Health Check",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/api/health",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "health"]
-        },
-        "description": "Comprueba el estado de la API y la conectividad con PostgreSQL."
-      },
-      "response": []
     },
     {
-      "name": "1. Auth - Registro Exitoso",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "if (pm.response.code === 201) {",
-              "    const res = pm.response.json();",
-              "    if (res.data && res.data.accessToken) {",
-              "        pm.collectionVariables.set('token', res.data.accessToken);",
-              "        console.log('Token guardado automáticamente en {{token}}');",
-              "    }",
-              "}"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"diego@endsecurity.com\",\n  \"passwordHash\": \"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/auth/register",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "auth", "register"]
-        },
-        "description": "Registra un usuario y guarda automáticamente el JWT retornado en la variable {{token}}."
-      },
-      "response": []
+      "key": "unknownEmail",
+      "value": "",
+      "type": "string"
     },
     {
-      "name": "2. Auth - Login Exitoso",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "if (pm.response.code === 200) {",
-              "    const res = pm.response.json();",
-              "    if (res.data && res.data.accessToken) {",
-              "        pm.collectionVariables.set('token', res.data.accessToken);",
-              "        console.log('Token actualizado en {{token}}');",
-              "    }",
-              "}"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"diego@endsecurity.com\",\n  \"passwordHash\": \"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/auth/login",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "auth", "login"]
-        },
-        "description": "Inicia sesión con credenciales válidas y actualiza el token JWT en la variable {{token}}."
-      },
-      "response": []
+      "key": "authHash",
+      "value": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ=",
+      "type": "string"
     },
     {
-      "name": "3. Auth - Login Fallido (Credenciales Incorrectas)",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"diego@endsecurity.com\",\n  \"passwordHash\": \"hash_totalmente_incorrecto_123456789\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/auth/login",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "auth", "login"]
-        },
-        "description": "Prueba de seguridad: Debe responder 401 Unauthorized sin revelar si falló el correo o la contraseña."
-      },
-      "response": []
+      "key": "kdfSalt",
+      "value": "Fx4lLDM6QUhPVl1ka3J5gA==",
+      "type": "string"
     },
     {
-      "name": "4. Users - Perfil de Usuario (/users/me - Con Token)",
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/api/users/me",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "users", "me"]
-        },
-        "description": "Ruta protegida por JwtAuthGuard. Debe responder 200 OK con los datos del usuario logueado."
-      },
-      "response": []
+      "key": "pvkCiphertext",
+      "value": "JSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdu",
+      "type": "string"
     },
     {
-      "name": "5. Users - Perfil Sin Token (Debe fallar 401)",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/api/users/me",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "users", "me"]
-        },
-        "description": "Prueba de seguridad: Intento de acceso sin Bearer token. Debe responder 401 Unauthorized."
-      },
-      "response": []
+      "key": "pvkNonce",
+      "value": "KTA3PkVMU1phaG92",
+      "type": "string"
     },
     {
-      "name": "6. Vault - Descargar Bóveda (GET /vault)",
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/api/vault",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "vault"]
-        },
-        "description": "Descarga la bóveda cifrada del usuario autenticado (encryptedBlob, salt, iv, version). Si es nuevo, devuelve 404 para inicializar."
-      },
-      "response": []
+      "key": "itemNonce",
+      "value": "NTxDSlFYX2ZtdHuC",
+      "type": "string"
     },
     {
-      "name": "7. Vault - Inicializar Bóveda (PUT /vault - Versión 1)",
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"encryptedBlob\": \"U2FsdGVkX1+vupppZxwVoWqqzrWXYahZSSlZKAdWsK3948sjd82...==\",\n  \"salt\": \"d9823f4a123e54b6789a\",\n  \"iv\": \"3a4b5c6d7e8f901234567890\",\n  \"version\": 1\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/vault",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "vault"]
-        },
-        "description": "Crea la primera versión de la bóveda cifrada en el servidor."
-      },
-      "response": []
+      "key": "itemCiphertext",
+      "value": "PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz+gEIDxYdJCsyOUBHTlVcY2pxeH+GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2Y=",
+      "type": "string"
     },
     {
-      "name": "8. Vault - Actualizar Bóveda (PUT /vault - Versión 2)",
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"encryptedBlob\": \"NUEVO_BLOB_CIFRADO_ACTUALIZADO_CON_NUEVAS_CUENTAS_CON_AES_GCM...==\",\n  \"salt\": \"d9823f4a123e54b6789a\",\n  \"iv\": \"9f8e7d6c5b4a321098765432\",\n  \"version\": 2\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/vault",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "vault"]
-        },
-        "description": "Actualiza la bóveda con la versión incrementada a 2."
-      },
-      "response": []
+      "key": "itemCiphertext2",
+      "value": "R05VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6/L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng",
+      "type": "string"
     },
     {
-      "name": "9. Vault - Conflicto de Versión (Debe fallar 409 Conflict)",
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"encryptedBlob\": \"INTENTO_DE_SOBREESCRITURA_DESACTUALIZADA...==\",\n  \"salt\": \"d9823f4a123e54b6789a\",\n  \"iv\": \"112233445566778899aabbcc\",\n  \"version\": 2\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/vault",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "vault"]
-        },
-        "description": "Prueba de concurrencia: Intenta enviar versión 2 cuando la base de datos ya está en la versión 2 (espera la versión 3). Debe retornar 409 Conflict."
-      },
-      "response": []
+      "key": "itemId",
+      "value": "",
+      "type": "string"
     },
     {
-      "name": "10. Seguridad - DTO con Parámetro Extra (Mass Assignment Test)",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"email\": \"otro@endsecurity.com\",\n  \"passwordHash\": \"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\",\n  \"isAdmin\": true\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/api/auth/register",
-          "host": ["{{baseUrl}}"],
-          "path": ["api", "auth", "register"]
-        },
-        "description": "Prueba de sanitización: Se envía un campo no permitido ('isAdmin'). Debe responder 400 Bad Request gracias a forbidNonWhitelisted: true."
-      },
-      "response": []
+      "key": "revision",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "oldRefreshToken",
+      "value": "",
+      "type": "string"
     }
   ]
 }

@@ -45,6 +45,11 @@ export class EnvironmentVariables {
   @IsOptional()
   JWT_REFRESH_EXPIRES_IN: string = '7d';
 
+  /** Clave del HMAC que encadena audit_log. Cambiarla invalida la verificación de lo ya registrado. */
+  @IsString()
+  @MinLength(32)
+  AUDIT_HMAC_KEY: string;
+
   @IsString()
   @IsOptional()
   TOTP_APP_NAME: string = 'End Security';
@@ -89,6 +94,7 @@ export function validateEnv(config: Record<string, unknown>) {
     const placeholders = [
       validatedConfig.JWT_SECRET,
       validatedConfig.JWT_REFRESH_SECRET,
+      validatedConfig.AUDIT_HMAC_KEY,
     ].some((secret) => secret.includes('change_in_production'));
     if (
       placeholders ||

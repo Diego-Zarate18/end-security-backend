@@ -1,5 +1,10 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { CurrentUser, Public } from '../../common/decorators';
+import {
+  ClientInfo,
+  type ClientInfoData,
+  CurrentUser,
+  Public,
+} from '../../common/decorators';
 import { AuthService } from './auth.service';
 import {
   AuthResponseDto,
@@ -26,8 +31,11 @@ export class AuthController {
 
   @Public()
   @Post('register')
-  register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
-    return this.authService.register(dto);
+  register(
+    @Body() dto: RegisterDto,
+    @ClientInfo() client: ClientInfoData,
+  ): Promise<AuthResponseDto> {
+    return this.authService.register(dto, client);
   }
 
   @Public()
@@ -35,20 +43,27 @@ export class AuthController {
   @Post('login')
   login(
     @Body() dto: LoginDto,
+    @ClientInfo() client: ClientInfoData,
   ): Promise<AuthResponseDto | TwoFactorChallengeDto> {
-    return this.authService.login(dto);
+    return this.authService.login(dto, client);
   }
 
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('refresh')
-  refresh(@Body() dto: RefreshTokenDto): Promise<TokenPairDto> {
-    return this.authService.refresh(dto.refreshToken);
+  refresh(
+    @Body() dto: RefreshTokenDto,
+    @ClientInfo() client: ClientInfoData,
+  ): Promise<TokenPairDto> {
+    return this.authService.refresh(dto.refreshToken, client);
   }
 
   @HttpCode(HttpStatus.NO_CONTENT)
   @Post('logout')
-  logout(@CurrentUser() user: AuthenticatedUser): Promise<void> {
-    return this.authService.logout(user.id, user.sessionId);
+  logout(
+    @CurrentUser() user: AuthenticatedUser,
+    @ClientInfo() client: ClientInfoData,
+  ): Promise<void> {
+    return this.authService.logout(user.id, user.sessionId, client);
   }
 }
