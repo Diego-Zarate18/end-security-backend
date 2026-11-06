@@ -14,6 +14,11 @@ export enum AuditEvent {
   EmailVerifyConfirm = 'email.verify_confirm',
   EmailChangeRequest = 'email.change_request',
   EmailChangeConfirm = 'email.change_confirm',
+  TwoFactorSetup = '2fa.setup',
+  TwoFactorActivate = '2fa.activate',
+  TwoFactorVerify = '2fa.verify',
+  TwoFactorDisable = '2fa.disable',
+  TwoFactorRecoveryRegenerate = '2fa.recovery_regenerate',
 }
 
 export type AuditOutcome = 'success' | 'failure';

@@ -8,6 +8,7 @@ import { PrismaModule } from './database/prisma.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { EmailVerificationModule } from './modules/email-verification/email-verification.module';
+import { TwoFactorModule } from './modules/two-factor/two-factor.module';
 import { JwtAuthGuard } from './modules/auth/guards';
 import { UsersModule } from './modules/users/users.module';
 import { VaultModule } from './modules/vault/vault.module';
@@ -24,6 +25,7 @@ import { VaultModule } from './modules/vault/vault.module';
     VaultModule,
     AuditModule,
     EmailVerificationModule,
+    TwoFactorModule,
   ],
   controllers: [AppController],
   providers: [

@@ -1,4 +1,5 @@
 import { plainToInstance, Transform } from 'class-transformer';
+import { parseTotpKeys } from './totp-keys';
 import {
   IsEnum,
   IsInt,
@@ -66,6 +67,10 @@ export class EnvironmentVariables {
   @IsOptional()
   EMAIL_FROM: string = 'End Security <onboarding@resend.dev>';
 
+  /** Claves AES-256 para cifrar los secretos TOTP: "1:<base64 de 32 bytes>". */
+  @IsString()
+  TOTP_ENCRYPTION_KEYS: string;
+
   @IsString()
   @IsOptional()
   TOTP_APP_NAME: string = 'End Security';
@@ -104,6 +109,12 @@ export function validateEnv(config: Record<string, unknown>) {
 
   if (errors.length > 0) {
     throw new Error(`[ConfigValidationError] ${errors.toString()}`);
+  }
+
+  try {
+    parseTotpKeys(validatedConfig.TOTP_ENCRYPTION_KEYS);
+  } catch (error) {
+    throw new Error(`[ConfigValidationError] ${(error as Error).message}`);
   }
 
   if (validatedConfig.NODE_ENV === Environment.Production) {

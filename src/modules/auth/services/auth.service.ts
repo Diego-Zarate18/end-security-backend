@@ -299,6 +299,18 @@ export class AuthService implements OnModuleInit {
       };
     }
 
+    return this.startSession(user, deviceName, client);
+  }
+
+  /**
+   * Crea la sesión del dispositivo y la registra en auditoría. Lo usan el
+   * login, la verificación del correo y el segundo factor (2FA).
+   */
+  async startSession(
+    user: UserWithTwoFactor,
+    deviceName: string,
+    client: ClientInfoData,
+  ): Promise<AuthResponseDto> {
     const tokens = await this.prisma.$transaction(async (tx) => {
       const created = await this.sessionsService.create(
         user.id,
