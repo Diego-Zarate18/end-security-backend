@@ -11,46 +11,46 @@ import type { ClientInfoData } from '../../../common/decorators';
 import { PrismaService } from '../../../database/prisma.service';
 import { AuditEvent } from '../../audit/audit.constants';
 import { AuditService } from '../../audit/services';
-import { MailService } from '../../mail/services/mail.service';
-import {
-  maskEmail,
-  verificationCodeMail,
-} from '../../mail/services/mail.templates';
+import { MailService } from '../../mail/services';
+import { maskEmail, verificationCodeMail } from '../../mail/services';
 import { CodeSentDto } from '../dto';
-
-export type EmailCodePurpose = 'verify_email' | 'change_email';
 
 export const CODE_TTL_MINUTES = 15;
 export const MAX_ATTEMPTS = 5;
 export const RESEND_COOLDOWN_SECONDS = 60;
 
-const REQUEST_EVENT: Record<EmailCodePurpose, AuditEvent> = {
-  verify_email: AuditEvent.EmailVerifyRequest,
-  change_email: AuditEvent.EmailChangeRequest,
-};
-const CONFIRM_EVENT: Record<EmailCodePurpose, AuditEvent> = {
-  verify_email: AuditEvent.EmailVerifyConfirm,
-  change_email: AuditEvent.EmailChangeConfirm,
-};
+const PURPOSE = 'verify_email';
 
 export interface EmailCodeActor {
   userId: string;
-  sessionId?: string | null;
   client: ClientInfoData;
 }
 
+/**
+ * Mismo mensaje para código incorrecto, vencido o con intentos agotados: así la
+ * respuesta no revela nada sobre la cuenta (ni si existe).
+ */
 export const invalidEmailCode = () =>
   new BadRequestException({
     error: 'InvalidCode',
-    message: 'El código es inválido o ya venció. Solicita uno nuevo.',
-    details: { remainingAttempts: 0 },
+    message:
+      'Código incorrecto o vencido. Después de 5 intentos fallidos solicita uno nuevo.',
   });
 
+export const resendTooSoon = (retryAfterSeconds: number) =>
+  new HttpException(
+    {
+      error: 'TooManyRequests',
+      message: `Espera ${retryAfterSeconds} segundos antes de pedir otro código.`,
+      details: { retryAfterSeconds },
+    },
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
+
 /**
- * Códigos de un solo uso por correo (tabla email_verifications):
- * 6 dígitos, 15 minutos de vigencia, 5 intentos y 60 s entre envíos. En la BD
- * solo queda su HMAC con un pepper del servidor; un código nuevo invalida los
- * anteriores del mismo propósito.
+ * Códigos de verificación de correo (tabla email_verifications): 6 dígitos,
+ * 15 minutos de vigencia, 5 intentos y 60 s entre envíos. En la BD solo queda
+ * su HMAC con un pepper del servidor; un código nuevo invalida los anteriores.
  */
 @Injectable()
 export class EmailCodeService {
@@ -74,13 +74,12 @@ export class EmailCodeService {
    */
   async issue(
     actor: EmailCodeActor,
-    purpose: EmailCodePurpose,
     target: string,
     onCooldown: 'throw' | 'skip' = 'throw',
   ): Promise<CodeSentDto> {
     const now = new Date();
     const latest = await this.prisma.email_verifications.findFirst({
-      where: { user_id: actor.userId, purpose },
+      where: { user_id: actor.userId, purpose: PURPOSE },
       orderBy: { created_at: 'desc' },
       select: { created_at: true, expires_at: true },
     });
@@ -90,22 +89,13 @@ export class EmailCodeService {
       );
       if (waited < RESEND_COOLDOWN_SECONDS) {
         const retryAfterSeconds = RESEND_COOLDOWN_SECONDS - waited;
-        if (onCooldown === 'skip') {
-          return {
-            sentTo: maskEmail(target),
-            codeSent: false,
-            expiresAt: latest.expires_at,
-            resendAvailableInSeconds: retryAfterSeconds,
-          };
-        }
-        throw new HttpException(
-          {
-            error: 'TooManyRequests',
-            message: `Espera ${retryAfterSeconds} segundos antes de pedir otro código.`,
-            details: { retryAfterSeconds },
-          },
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
+        if (onCooldown === 'throw') throw resendTooSoon(retryAfterSeconds);
+        return {
+          sentTo: maskEmail(target),
+          codeSent: false,
+          expiresAt: latest.expires_at,
+          resendAvailableInSeconds: retryAfterSeconds,
+        };
       }
     }
 
@@ -117,7 +107,7 @@ export class EmailCodeService {
       this.prisma.email_verifications.updateMany({
         where: {
           user_id: actor.userId,
-          purpose,
+          purpose: PURPOSE,
           consumed_at: null,
           expires_at: { gt: now },
         },
@@ -127,7 +117,7 @@ export class EmailCodeService {
         data: {
           id,
           user_id: actor.userId,
-          purpose,
+          purpose: PURPOSE,
           target_email: target,
           code_hash: this.hash(id, code),
           attempts: 0,
@@ -139,8 +129,8 @@ export class EmailCodeService {
     try {
       await this.mailService.send({
         to: target,
-        ...verificationCodeMail(code, CODE_TTL_MINUTES, purpose),
-        idempotencyKey: `${purpose}/${id}`,
+        ...verificationCodeMail(code, CODE_TTL_MINUTES),
+        idempotencyKey: `${PURPOSE}/${id}`,
       });
     } catch (error) {
       // Un código que nunca llegó no debe quedar vigente
@@ -150,8 +140,7 @@ export class EmailCodeService {
       });
       await this.auditService.recordSafely({
         userId: actor.userId,
-        sessionId: actor.sessionId,
-        event: REQUEST_EVENT[purpose],
+        event: AuditEvent.EmailVerifyRequest,
         outcome: 'failure',
         metadata: { reason: 'mail_send_failed' },
         client: actor.client,
@@ -161,8 +150,7 @@ export class EmailCodeService {
 
     await this.auditService.record({
       userId: actor.userId,
-      sessionId: actor.sessionId,
-      event: REQUEST_EVENT[purpose],
+      event: AuditEvent.EmailVerifyRequest,
       outcome: 'success',
       client: actor.client,
     });
@@ -181,13 +169,12 @@ export class EmailCodeService {
    */
   async check(
     actor: EmailCodeActor,
-    purpose: EmailCodePurpose,
     code: string,
   ): Promise<email_verifications> {
     const entry = await this.prisma.email_verifications.findFirst({
       where: {
         user_id: actor.userId,
-        purpose,
+        purpose: PURPOSE,
         consumed_at: null,
         expires_at: { gt: new Date() },
       },
@@ -210,23 +197,14 @@ export class EmailCodeService {
       expected.length === entry.code_hash.length &&
       timingSafeEqual(expected, entry.code_hash);
     if (!matches) {
-      const remainingAttempts = Math.max(0, MAX_ATTEMPTS - entry.attempts - 1);
       await this.auditService.recordSafely({
         userId: actor.userId,
-        sessionId: actor.sessionId,
-        event: CONFIRM_EVENT[purpose],
+        event: AuditEvent.EmailVerifyConfirm,
         outcome: 'failure',
-        metadata: { remainingAttempts },
+        metadata: { attempt: entry.attempts + 1 },
         client: actor.client,
       });
-      throw new BadRequestException({
-        error: 'InvalidCode',
-        message:
-          remainingAttempts > 0
-            ? 'Código incorrecto.'
-            : 'Código incorrecto. Agotaste los intentos; solicita un código nuevo.',
-        details: { remainingAttempts },
-      });
+      throw invalidEmailCode();
     }
 
     return entry;

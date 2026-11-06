@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { parseDurationMs } from '../../../common/utils';
 import {
   EMAIL_CHALLENGE_TTL_SECONDS,
@@ -12,6 +12,12 @@ import {
 export interface ChallengeClaims {
   userId: string;
   deviceName: string;
+  /** Solo en desafíos de correo. */
+  maskedEmail: string;
+  /** Solo en desafíos de 2FA. */
+  jti?: string;
+  /** Vencimiento en milisegundos. */
+  expiresAt: number;
 }
 
 const REFRESH_TOKEN_PATTERN = /^([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/;
@@ -51,16 +57,27 @@ export class TokenService {
     );
   }
 
+  /** Lleva un `jti` aleatorio para que TwoFactorService lo acepte una sola vez. */
   signTwoFactorChallenge(userId: string, deviceName: string): string {
     return this.jwtService.sign(
       { sub: userId, typ: TokenType.TwoFactorPending, dn: deviceName },
-      { expiresIn: TWO_FACTOR_CHALLENGE_TTL_SECONDS },
+      { expiresIn: TWO_FACTOR_CHALLENGE_TTL_SECONDS, jwtid: randomUUID() },
     );
   }
 
-  signEmailVerificationChallenge(userId: string, deviceName: string): string {
+  /** `em` lleva el correo ya enmascarado, para responder igual en el reenvío. */
+  signEmailVerificationChallenge(
+    userId: string,
+    deviceName: string,
+    maskedEmail: string,
+  ): string {
     return this.jwtService.sign(
-      { sub: userId, typ: TokenType.EmailVerificationPending, dn: deviceName },
+      {
+        sub: userId,
+        typ: TokenType.EmailVerificationPending,
+        dn: deviceName,
+        em: maskedEmail,
+      },
       { expiresIn: EMAIL_CHALLENGE_TTL_SECONDS },
     );
   }
@@ -75,9 +92,18 @@ export class TokenService {
         sub?: string;
         typ?: string;
         dn?: string;
+        em?: string;
+        jti?: string;
+        exp?: number;
       }>(token);
       if (payload.typ === expected && payload.sub && payload.dn) {
-        return { userId: payload.sub, deviceName: payload.dn };
+        return {
+          userId: payload.sub,
+          deviceName: payload.dn,
+          maskedEmail: payload.em ?? '',
+          jti: payload.jti,
+          expiresAt: (payload.exp ?? 0) * 1000,
+        };
       }
     } catch {
       // firma inválida o vencido: mismo mensaje

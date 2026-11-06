@@ -20,37 +20,30 @@ const layout = (title: string, body: string) => `<!doctype html>
   </body>
 </html>`;
 
-const codeBlock = (code: string) =>
-  `<p style="margin:16px 0;font-size:32px;font-weight:bold;letter-spacing:8px;font-family:'Courier New',monospace">${code}</p>`;
-
 export function verificationCodeMail(
   code: string,
   minutes: number,
-  purpose: 'verify_email' | 'change_email',
 ): RenderedMail {
-  const verifying = purpose === 'verify_email';
-  const title = verifying ? 'Verifica tu correo' : 'Confirma tu nuevo correo';
-  const intro = verifying
-    ? 'Usa este código para verificar el correo de tu cuenta:'
-    : 'Usa este código para confirmar el cambio del correo de tu cuenta a esta dirección:';
+  const title = 'Verifica tu correo';
+  const intro = 'Usa este código para verificar el correo de tu cuenta:';
   const ignore =
     'Si no fuiste tú, ignora este mensaje; nadie podrá usar el código sin acceso a tu cuenta.';
   return {
     subject: `${code} es tu código de ${APP_NAME}`,
     html: layout(
       title,
-      `<p style="margin:0">${intro}</p>${codeBlock(code)}<p style="margin:0">Vence en ${minutes} minutos.</p><p style="margin:16px 0 0;color:#52606d">${ignore}</p>`,
+      `<p style="margin:0">${intro}</p><p style="margin:16px 0;font-size:32px;font-weight:bold;letter-spacing:8px;font-family:'Courier New',monospace">${code}</p><p style="margin:0">Vence en ${minutes} minutos.</p><p style="margin:16px 0 0;color:#52606d">${ignore}</p>`,
     ),
     text: `${title}\n\n${intro}\n\n${code}\n\nVence en ${minutes} minutos.\n${ignore}`,
   };
 }
 
-export function emailChangedNoticeMail(newEmail: string): RenderedMail {
-  const masked = maskEmail(newEmail);
-  const title = 'Cambió el correo de tu cuenta';
-  const body = `El correo de tu cuenta de ${APP_NAME} se cambió a ${masked} y se cerraron las sesiones de tus otros dispositivos. Si no fuiste tú, contacta al soporte de inmediato.`;
+/** Se envía cuando alguien intenta registrarse con un correo que ya tiene cuenta. */
+export function registrationAttemptMail(): RenderedMail {
+  const title = 'Intento de registro con tu correo';
+  const body = `Alguien intentó crear una cuenta de ${APP_NAME} con este correo, que ya tiene una. No se creó nada ni cambió tu cuenta. Si fuiste tú, inicia sesión con tu contraseña maestra.`;
   return {
-    subject: `${APP_NAME}: el correo de tu cuenta cambió`,
+    subject: `${APP_NAME}: intento de registro con tu correo`,
     html: layout(title, `<p style="margin:0">${body}</p>`),
     text: `${title}\n\n${body}`,
   };

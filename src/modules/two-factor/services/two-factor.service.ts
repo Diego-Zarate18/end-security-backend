@@ -55,6 +55,8 @@ const EPOCH_TOLERANCE_SECONDS = 30;
 export class TwoFactorService {
   private readonly issuer: string;
   private readonly pepper: Buffer;
+  /** jti de desafíos 2FA ya canjeados → vencimiento (ms). */
+  private readonly usedChallenges = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -205,35 +207,64 @@ export class TwoFactorService {
     }
     await this.ensureNotLocked(user.id);
 
-    const record = await this.prisma.two_factor.findUniqueOrThrow({
-      where: { user_id: user.id },
-    });
-    const method = dto.code ? 'totp' : 'recovery_code';
-    const ok = dto.code
-      ? (await this.consumeTotp(record, dto.code)) !== null
-      : await this.consumeRecoveryCode(user.id, dto.recoveryCode!);
+    // Cada desafío abre una sola sesión. Se reserva antes del primer await para
+    // que dos peticiones simultáneas con el mismo desafío no pasen ambas.
+    const challengeId = claims.jti ?? '';
+    if (!challengeId || this.usedChallenges.has(challengeId)) {
+      throw new UnauthorizedException(
+        'El desafío no es válido o ya venció. Inicia sesión de nuevo.',
+      );
+    }
+    this.reserveChallenge(challengeId, claims.expiresAt);
 
-    const auditBase = { userId: user.id, client };
-    if (!ok) {
-      await this.auditService.recordSafely({
+    try {
+      const record = await this.prisma.two_factor.findUniqueOrThrow({
+        where: { user_id: user.id },
+      });
+      const method = dto.code ? 'totp' : 'recovery_code';
+      const ok = dto.code
+        ? (await this.consumeTotp(record, dto.code)) !== null
+        : await this.consumeRecoveryCode(user.id, dto.recoveryCode!);
+
+      const auditBase = { userId: user.id, client };
+      if (!ok) {
+        await this.auditService.recordSafely({
+          ...auditBase,
+          event: AuditEvent.TwoFactorVerify,
+          outcome: 'failure',
+          metadata: { method, reason: 'invalid_code' },
+        });
+        throw this.invalidCode();
+      }
+
+      const remaining = await this.prisma.recovery_codes.count({
+        where: { user_id: user.id, used_at: null },
+      });
+      await this.auditService.record({
         ...auditBase,
         event: AuditEvent.TwoFactorVerify,
-        outcome: 'failure',
-        metadata: { method, reason: 'invalid_code' },
+        outcome: 'success',
+        metadata: { method, recoveryCodesRemaining: remaining },
       });
-      throw this.invalidCode();
+      return await this.authService.startSession(
+        user,
+        claims.deviceName,
+        client,
+      );
+    } catch (error) {
+      // Un código mal escrito no quema el desafío: se puede reintentar
+      this.usedChallenges.delete(challengeId);
+      throw error;
     }
+  }
 
-    const remaining = await this.prisma.recovery_codes.count({
-      where: { user_id: user.id, used_at: null },
-    });
-    await this.auditService.record({
-      ...auditBase,
-      event: AuditEvent.TwoFactorVerify,
-      outcome: 'success',
-      metadata: { method, recoveryCodesRemaining: remaining },
-    });
-    return this.authService.startSession(user, claims.deviceName, client);
+  /** Marca un desafío como usado hasta que venza; limpia los ya vencidos. */
+  private reserveChallenge(id: string, expiresAt: number): void {
+    const now = Date.now();
+    for (const [key, exp] of this.usedChallenges) {
+      if (exp <= now) this.usedChallenges.delete(key);
+    }
+    this.usedChallenges.set(id, expiresAt);
   }
 
   /** Desactivar exige contraseña maestra y un código vigente (TOTP o de recuperación). */

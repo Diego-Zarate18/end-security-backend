@@ -5,14 +5,26 @@ import {
   OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import type { ClientInfoData } from '../../../common/decorators';
 import { fromBase64, toBase64 } from '../../../common/utils';
 import { PrismaService } from '../../../database/prisma.service';
 import { AuditEvent } from '../../audit/audit.constants';
 import { AuditService } from '../../audit/services';
-import { EmailCodeService } from '../../email-verification/services';
+import {
+  CODE_TTL_MINUTES,
+  EmailCodeService,
+  invalidEmailCode,
+  RESEND_COOLDOWN_SECONDS,
+  resendTooSoon,
+} from '../../email-verification/services';
+import {
+  MailService,
+  maskEmail,
+  registrationAttemptMail,
+} from '../../mail/services';
 import {
   UsersService,
   UserWithTwoFactor,
@@ -20,6 +32,7 @@ import {
 import { verifyAuthHash } from '../auth-hash';
 import {
   DEFAULT_KDF_PARAMS,
+  EMAIL_CHALLENGE_TTL_SECONDS,
   SERVER_ARGON2_OPTIONS,
   TokenType,
 } from '../auth.constants';
@@ -40,6 +53,8 @@ import {
 import { SessionsService } from './sessions.service';
 import { TokenService } from './token.service';
 
+const REGISTRATION_NOTICE_INTERVAL_MS = 60 * 60 * 1000;
+
 const invalidCredentials = () =>
   new UnauthorizedException('Credenciales inválidas.');
 
@@ -51,6 +66,10 @@ export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
   /** Hash señuelo para igualar el tiempo de respuesta cuando el correo no existe. */
   private dummyHash = '';
+  /** Último reenvío simulado por desafío señuelo (registro con correo existente). */
+  private readonly decoySends = new Map<string, number>();
+  /** Último aviso de intento de registro enviado a cada dueño. */
+  private readonly registrationNotices = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -59,6 +78,7 @@ export class AuthService implements OnModuleInit {
     private readonly tokenService: TokenService,
     private readonly auditService: AuditService,
     private readonly emailCodes: EmailCodeService,
+    private readonly mailService: MailService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -84,53 +104,68 @@ export class AuthService implements OnModuleInit {
   }
 
   /**
-   * Crea la cuenta sin sesión: el acceso empieza hasta verificar el correo con
-   * el código que se envía aquí mismo.
+   * Crea la cuenta sin sesión: el acceso empieza al verificar el correo con el
+   * código que se envía aquí mismo.
+   *
+   * Si el correo ya tiene cuenta responde exactamente igual (201 con un
+   * desafío), pero el desafío es un señuelo que nunca se puede confirmar, y al
+   * dueño le llega un aviso. Así el registro no revela qué correos existen.
    */
   async register(
     dto: RegisterDto,
     client: ClientInfoData,
   ): Promise<EmailVerificationRequiredDto> {
-    const existing = await this.usersService.findByEmail(dto.email);
-    if (existing) {
-      throw new ConflictException(
-        'El correo electrónico ya se encuentra registrado.',
-      );
-    }
-
-    // Defensa en profundidad: el servidor vuelve a hashear el auth key del cliente
+    // Se hashea en ambos caminos para que el tiempo de respuesta sea parecido
     const authHash = await argon2.hash(
       Buffer.from(fromBase64(dto.authHash)),
       SERVER_ARGON2_OPTIONS,
     );
 
-    const user = await this.prisma.$transaction(async (tx) => {
-      const created = await this.usersService.create(
-        {
-          email: dto.email,
-          displayName: dto.displayName,
-          authHash,
-          kdfSalt: fromBase64(dto.kdf.salt),
-          kdfMemoryKib: dto.kdf.memoryKib,
-          kdfIterations: dto.kdf.iterations,
-          kdfParallelism: dto.kdf.parallelism,
-          pvkCiphertext: fromBase64(dto.pvk.ciphertext),
-          pvkNonce: fromBase64(dto.pvk.nonce),
-        },
-        tx,
-      );
-      await this.auditService.record(
-        {
-          userId: created.id,
-          event: AuditEvent.AuthRegister,
-          outcome: 'success',
-          metadata: { deviceName: dto.deviceName },
-          client,
-        },
-        tx,
-      );
-      return created;
-    });
+    const existing = await this.usersService.findByEmail(dto.email);
+    if (existing) {
+      return this.registrationDecoy(existing.id, dto, client);
+    }
+
+    let user: UserWithTwoFactor;
+    try {
+      user = await this.prisma.$transaction(async (tx) => {
+        const created = await this.usersService.create(
+          {
+            email: dto.email,
+            displayName: dto.displayName,
+            authHash,
+            kdfSalt: fromBase64(dto.kdf.salt),
+            kdfMemoryKib: dto.kdf.memoryKib,
+            kdfIterations: dto.kdf.iterations,
+            kdfParallelism: dto.kdf.parallelism,
+            pvkCiphertext: fromBase64(dto.pvk.ciphertext),
+            pvkNonce: fromBase64(dto.pvk.nonce),
+          },
+          tx,
+        );
+        await this.auditService.record(
+          {
+            userId: created.id,
+            event: AuditEvent.AuthRegister,
+            outcome: 'success',
+            metadata: { deviceName: dto.deviceName },
+            client,
+          },
+          tx,
+        );
+        return created;
+      });
+    } catch (error) {
+      // Dos registros simultáneos con el mismo correo: el segundo recibe el señuelo
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const owner = await this.usersService.findByEmail(dto.email);
+        if (owner) return this.registrationDecoy(owner.id, dto, client);
+      }
+      throw error;
+    }
 
     return this.emailVerificationRequired(user, dto.deviceName, client);
   }
@@ -182,15 +217,19 @@ export class AuthService implements OnModuleInit {
       dto.challengeToken,
       TokenType.EmailVerificationPending,
     );
-    const user = await this.usersService.findActiveById(claims.userId);
+    const user = await this.usersService.findActiveByIdOrNull(claims.userId);
+    // Desafío señuelo (correo ya registrado): se comporta como un código incorrecto
+    if (!user) throw invalidEmailCode();
     if (user.email_verified_at) {
       throw new ConflictException(
         'Tu correo ya está verificado. Inicia sesión.',
       );
     }
 
-    const actor = { userId: user.id, client };
-    const entry = await this.emailCodes.check(actor, 'verify_email', dto.code);
+    const entry = await this.emailCodes.check(
+      { userId: user.id, client },
+      dto.code,
+    );
     const now = new Date();
 
     await this.prisma.$transaction(async (tx) => {
@@ -223,17 +262,30 @@ export class AuthService implements OnModuleInit {
       dto.challengeToken,
       TokenType.EmailVerificationPending,
     );
-    const user = await this.usersService.findActiveById(claims.userId);
-    if (user.email_verified_at) {
+    const user = await this.usersService.findActiveByIdOrNull(claims.userId);
+    if (user?.email_verified_at) {
       throw new ConflictException(
         'Tu correo ya está verificado. Inicia sesión.',
       );
     }
-    const verification = await this.emailCodes.issue(
-      { userId: user.id, client },
-      'verify_email',
-      user.email,
-    );
+
+    let verification: EmailVerificationRequiredDto['verification'];
+    if (user) {
+      verification = await this.emailCodes.issue(
+        { userId: user.id, client },
+        user.email,
+      );
+    } else {
+      // Señuelo: mismo límite de 60 s y misma respuesta, sin enviar nada
+      const last = this.decoySends.get(claims.userId) ?? 0;
+      const waited = Math.floor((Date.now() - last) / 1000);
+      if (waited < RESEND_COOLDOWN_SECONDS) {
+        throw resendTooSoon(RESEND_COOLDOWN_SECONDS - waited);
+      }
+      this.trackDecoy(claims.userId);
+      verification = this.decoyVerification(claims.maskedEmail);
+    }
+
     return {
       requiresEmailVerification: true,
       requires2FA: false,
@@ -342,21 +394,22 @@ export class AuthService implements OnModuleInit {
     deviceName: string,
     client: ClientInfoData,
   ): Promise<EmailVerificationRequiredDto> {
+    const masked = maskEmail(user.email);
     const challengeToken = this.tokenService.signEmailVerificationChallenge(
       user.id,
       deviceName,
+      masked,
     );
     let verification: EmailVerificationRequiredDto['verification'];
     try {
       verification = await this.emailCodes.issue(
         { userId: user.id, client },
-        'verify_email',
         user.email,
         'skip',
       );
     } catch {
       verification = {
-        sentTo: '',
+        sentTo: masked,
         codeSent: false,
         expiresAt: new Date(),
         resendAvailableInSeconds: 0,
@@ -368,6 +421,71 @@ export class AuthService implements OnModuleInit {
       challengeToken,
       verification,
     };
+  }
+
+  /** Respuesta de registro para un correo que ya tiene cuenta (ver register). */
+  private async registrationDecoy(
+    ownerId: string,
+    dto: RegisterDto,
+    client: ClientInfoData,
+  ): Promise<EmailVerificationRequiredDto> {
+    await this.auditService.record({
+      userId: ownerId,
+      event: AuditEvent.AuthRegister,
+      outcome: 'failure',
+      metadata: { reason: 'email_taken' },
+      client,
+    });
+
+    // Aviso al dueño, como mucho uno por hora para no llenarle la bandeja
+    const lastNotice = this.registrationNotices.get(ownerId) ?? 0;
+    if (Date.now() - lastNotice > REGISTRATION_NOTICE_INTERVAL_MS) {
+      this.registrationNotices.set(ownerId, Date.now());
+      try {
+        await this.mailService.send({
+          to: dto.email,
+          ...registrationAttemptMail(),
+          idempotencyKey: `register-attempt/${ownerId}/${Date.now()}`,
+        });
+      } catch {
+        this.logger.warn('No se pudo enviar el aviso de intento de registro.');
+      }
+    }
+
+    const decoyId = randomUUID();
+    this.trackDecoy(decoyId);
+    const masked = maskEmail(dto.email);
+    return {
+      requiresEmailVerification: true,
+      requires2FA: false,
+      challengeToken: this.tokenService.signEmailVerificationChallenge(
+        decoyId,
+        dto.deviceName,
+        masked,
+      ),
+      verification: this.decoyVerification(masked),
+    };
+  }
+
+  private decoyVerification(
+    maskedEmail: string,
+  ): EmailVerificationRequiredDto['verification'] {
+    return {
+      sentTo: maskedEmail,
+      codeSent: true,
+      expiresAt: new Date(Date.now() + CODE_TTL_MINUTES * 60_000),
+      resendAvailableInSeconds: RESEND_COOLDOWN_SECONDS,
+    };
+  }
+
+  /** Recuerda el último "envío" de un señuelo; olvida los que ya vencieron. */
+  private trackDecoy(decoyId: string): void {
+    const now = Date.now();
+    for (const [id, at] of this.decoySends) {
+      if (now - at > EMAIL_CHALLENGE_TTL_SECONDS * 1000)
+        this.decoySends.delete(id);
+    }
+    this.decoySends.set(decoyId, now);
   }
 
   private kdfOf(user: UserWithTwoFactor): KdfParamsResponseDto {

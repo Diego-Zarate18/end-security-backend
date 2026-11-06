@@ -55,6 +55,13 @@ export class UsersService {
     });
   }
 
+  findActiveByIdOrNull(id: string): Promise<UserWithTwoFactor | null> {
+    return this.prisma.users.findFirst({
+      where: { id, deleted_at: null },
+      include: withTwoFactor,
+    });
+  }
+
   async findActiveById(id: string): Promise<UserWithTwoFactor> {
     const user = await this.prisma.users.findFirst({
       where: { id, deleted_at: null },

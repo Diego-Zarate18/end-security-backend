@@ -45,9 +45,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
         case 'P2002': {
           status = HttpStatus.CONFLICT;
           errorName = 'ConflictError';
-          const target = (exception.meta?.target as string[]) || [];
-          const field = target.length > 0 ? target.join(', ') : 'recurso';
-          message = `Ya existe un registro con ese valor de ${field}.`;
+          // Sin nombres de columnas: el detalle queda solo en el log del servidor
+          message = 'El recurso ya existe.';
           break;
         }
         case 'P2025': {

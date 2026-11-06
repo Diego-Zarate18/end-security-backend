@@ -12,8 +12,6 @@ export enum AuditEvent {
   VaultSyncConflict = 'vault.sync_conflict',
   EmailVerifyRequest = 'email.verify_request',
   EmailVerifyConfirm = 'email.verify_confirm',
-  EmailChangeRequest = 'email.change_request',
-  EmailChangeConfirm = 'email.change_confirm',
   TwoFactorSetup = '2fa.setup',
   TwoFactorActivate = '2fa.activate',
   TwoFactorVerify = '2fa.verify',

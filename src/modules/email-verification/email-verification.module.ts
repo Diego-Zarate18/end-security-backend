@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { MailModule } from '../mail/mail.module';
-import { UsersModule } from '../users/users.module';
-import { EmailVerificationController } from './controllers';
-import { EmailCodeService, EmailVerificationService } from './services';
+import { EmailCodeService } from './services';
 
-/** No importa AuthModule: AuthModule lo importa a él para el login con correo verificado. */
+/**
+ * Códigos de verificación de correo. Sin controller propio: los endpoints
+ * /auth/email/verify/* viven en AuthController, que lo importa.
+ */
 @Module({
-  imports: [UsersModule, AuditModule, MailModule],
-  controllers: [EmailVerificationController],
-  providers: [EmailCodeService, EmailVerificationService],
+  imports: [AuditModule, MailModule],
+  providers: [EmailCodeService],
   exports: [EmailCodeService],
 })
 export class EmailVerificationModule {}
