@@ -15,6 +15,8 @@ import {
 import type { AuthenticatedUser } from '../../auth/strategies';
 import {
   PushVaultChangesDto,
+  RotateVaultKeyDto,
+  VaultKeyRotatedDto,
   SyncQueryDto,
   VaultPushResponseDto,
   VaultSyncResponseDto,
@@ -32,6 +34,20 @@ export class VaultController {
     @Query() query: SyncQueryDto,
   ): Promise<VaultSyncResponseDto> {
     return this.vaultService.getChanges(userId, query.since ?? 0);
+  }
+
+  /** Cambia la clave de la bóveda (todos los elementos recifrados). */
+  @HttpCode(HttpStatus.OK)
+  @Post('rotate-key')
+  rotateKey(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RotateVaultKeyDto,
+    @ClientInfo() client: ClientInfoData,
+  ): Promise<VaultKeyRotatedDto> {
+    return this.vaultService.rotateKey(
+      { userId: user.id, sessionId: user.sessionId, client },
+      dto,
+    );
   }
 
   /** Aplica un lote de cambios de forma atómica (todo o nada). */

@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'crypto';
 import type { ClientInfoData } from '../../../common/decorators';
@@ -18,8 +13,8 @@ import {
   MailService,
   passwordChangedMail,
 } from '../../mail/services';
-import { TwoFactorService } from '../../two-factor/services';
-import { UsersService, UserWithTwoFactor } from '../../users/services';
+import { UsersService } from '../../users/services';
+import { ReauthService } from './reauth.service';
 import {
   ChangeMasterPasswordDto,
   DeleteAccountDto,
@@ -43,7 +38,7 @@ export class AccountService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
-    private readonly twoFactor: TwoFactorService,
+    private readonly reauth: ReauthService,
     private readonly auditService: AuditService,
     private readonly mailService: MailService,
   ) {}
@@ -54,13 +49,7 @@ export class AccountService {
   ): Promise<PasswordChangedDto> {
     const event = AuditEvent.AccountPasswordChange;
     const user = await this.usersService.findActiveById(actor.userId);
-    await this.reauthenticate(
-      actor,
-      user,
-      dto.currentAuthHash,
-      dto.code,
-      event,
-    );
+    await this.reauth.verify(actor, user, dto.currentAuthHash, dto.code, event);
 
     if (await verifyAuthHash(user.auth_hash, dto.newAuthHash)) {
       throw new BadRequestException(
@@ -136,7 +125,7 @@ export class AccountService {
   ): Promise<void> {
     const event = AuditEvent.AccountDelete;
     const user = await this.usersService.findActiveById(actor.userId);
-    await this.reauthenticate(actor, user, dto.authHash, dto.code, event);
+    await this.reauth.verify(actor, user, dto.authHash, dto.code, event);
 
     const email = user.email;
     const now = new Date();
@@ -185,37 +174,6 @@ export class AccountService {
       accountDeletedMail(),
       `account-deleted/${user.id}`,
     );
-  }
-
-  private async reauthenticate(
-    actor: AccountActor,
-    user: UserWithTwoFactor,
-    authHash: string,
-    code: string | undefined,
-    event: AuditEvent,
-  ): Promise<void> {
-    if (!(await verifyAuthHash(user.auth_hash, authHash))) {
-      await this.auditService.recordSafely({
-        userId: user.id,
-        sessionId: actor.sessionId,
-        event,
-        outcome: 'failure',
-        metadata: { reason: 'invalid_credentials' },
-        client: actor.client,
-      });
-      // 403 y no 401: la sesión sigue siendo válida
-      throw new ForbiddenException('La contraseña maestra no es correcta.');
-    }
-
-    if (user.two_factor?.status !== 'active') return;
-    if (!code) {
-      throw new BadRequestException({
-        error: 'SecondFactorRequired',
-        message:
-          'Tu cuenta tiene verificación en dos pasos: envía también code (de tu app o de recuperación).',
-      });
-    }
-    await this.twoFactor.verifySecondFactor(actor, code, event);
   }
 
   /** Los avisos por correo nunca hacen fallar la operación ya hecha. */

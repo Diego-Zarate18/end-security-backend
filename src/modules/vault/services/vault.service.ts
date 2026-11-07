@@ -10,8 +10,13 @@ import { bigintToNumber, fromBase64, toBase64 } from '../../../common/utils';
 import { PrismaService } from '../../../database/prisma.service';
 import { AuditEvent } from '../../audit/audit.constants';
 import { AuditService } from '../../audit/services';
+import { ReauthService } from '../../account/services';
+import { SessionsService } from '../../auth/services';
+import { UsersService } from '../../users/services';
 import {
   PushVaultChangesDto,
+  RotateVaultKeyDto,
+  VaultKeyRotatedDto,
   VaultConflictDto,
   VaultItemDto,
   VaultPushResponseDto,
@@ -35,6 +40,9 @@ export class VaultService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly usersService: UsersService,
+    private readonly sessionsService: SessionsService,
+    private readonly reauth: ReauthService,
   ) {}
 
   async getChanges(
@@ -43,7 +51,11 @@ export class VaultService {
   ): Promise<VaultSyncResponseDto> {
     const user = await this.prisma.users.findFirst({
       where: { id: userId, deleted_at: null },
-      select: { vault_revision: true, purged_through_revision: true },
+      select: {
+        vault_revision: true,
+        purged_through_revision: true,
+        key_version: true,
+      },
     });
     if (!user) {
       throw new NotFoundException('Usuario no encontrado.');
@@ -67,6 +79,7 @@ export class VaultService {
     return {
       revision: bigintToNumber(user.vault_revision),
       purgedThroughRevision: bigintToNumber(user.purged_through_revision),
+      keyVersion: user.key_version,
       fullResync,
       items: items.map((item) => this.toItemDto(item)),
     };
@@ -237,6 +250,123 @@ export class VaultService {
 
       return { revision: bigintToNumber(revision), applied };
     });
+  }
+
+  /**
+   * Cambia la clave de la bóveda: recibe todos los elementos vigentes recifrados
+   * y la nueva clave protegida (pvk). Es todo o nada: si falta o sobra algún
+   * elemento, o si otro dispositivo cambió las llaves, no se aplica nada (409).
+   * Cierra los demás dispositivos, que tenían la clave anterior.
+   */
+  async rotateKey(
+    actor: { userId: string; sessionId: string; client: ClientInfoData },
+    dto: RotateVaultKeyDto,
+  ): Promise<VaultKeyRotatedDto> {
+    const event = AuditEvent.VaultKeyRotation;
+    const user = await this.usersService.findActiveById(actor.userId);
+    await this.reauth.verify(actor, user, dto.authHash, dto.code, event);
+
+    const items = dto.items.map((item) => ({
+      ...item,
+      id: item.id.toLowerCase(),
+    }));
+    const ids = new Set(items.map((i) => i.id));
+    if (ids.size !== items.length) {
+      throw new BadRequestException(
+        'Un mismo elemento no puede aparecer más de una vez.',
+      );
+    }
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        // El UPDATE bloquea la fila del usuario: ninguna sincronización se cuela en medio
+        const locked = await tx.users.update({
+          where: { id: actor.userId },
+          data: { vault_revision: { increment: 1 } },
+          select: { vault_revision: true, key_version: true },
+        });
+        if (locked.key_version !== dto.keyVersion) {
+          throw new ConflictException({
+            error: 'KeyVersionMismatch',
+            message:
+              'Las llaves de la cuenta cambiaron en otro dispositivo. Inicia sesión de nuevo y repite la rotación.',
+            details: { currentKeyVersion: locked.key_version },
+          });
+        }
+
+        const current = await tx.vault_items.findMany({
+          where: { user_id: actor.userId, deleted_at: null },
+          select: { id: true },
+        });
+        const currentIds = new Set(current.map((c) => c.id));
+        const missing = [...currentIds].filter((id) => !ids.has(id));
+        const unknown = [...ids].filter((id) => !currentIds.has(id));
+        if (missing.length > 0 || unknown.length > 0) {
+          throw new ConflictException({
+            error: 'VaultChanged',
+            message:
+              'La bóveda cambió: descarga los cambios, recifra todos los elementos y vuelve a intentarlo.',
+            details: { missing, unknown },
+          });
+        }
+
+        const revision = locked.vault_revision;
+        for (const item of items) {
+          await tx.vault_items.update({
+            where: { id: item.id },
+            data: {
+              nonce: fromBase64(item.nonce),
+              ciphertext: fromBase64(item.ciphertext),
+              format_version: item.formatVersion,
+              version: { increment: 1 },
+              revision,
+            },
+          });
+        }
+
+        const updated = await tx.users.update({
+          where: { id: actor.userId },
+          data: {
+            pvk_ciphertext: fromBase64(dto.pvk.ciphertext),
+            pvk_nonce: fromBase64(dto.pvk.nonce),
+            key_version: { increment: 1 },
+          },
+          select: { key_version: true },
+        });
+
+        const otherSessionsRevoked = await this.sessionsService.revokeOthers(
+          actor.userId,
+          actor.sessionId,
+          'key_rotation',
+          tx,
+        );
+
+        await this.auditService.record(
+          {
+            userId: actor.userId,
+            sessionId: actor.sessionId,
+            event,
+            outcome: 'success',
+            metadata: {
+              keyVersion: updated.key_version,
+              itemsRotated: items.length,
+              otherSessionsRevoked,
+            },
+            client: actor.client,
+          },
+          tx,
+        );
+
+        return {
+          keyVersion: updated.key_version,
+          revision: bigintToNumber(revision),
+          itemsRotated: items.length,
+          otherSessionsRevoked,
+        };
+      },
+      // Con miles de elementos la transacción tarda más que los 5 s por defecto
+      { timeout: 60_000 },
+    );
   }
 
   private conflictCount(error: ConflictException): number {

@@ -6,7 +6,7 @@ import { AuditModule } from '../audit/audit.module';
 import { EmailVerificationModule } from '../email-verification/email-verification.module';
 import { MailModule } from '../mail/mail.module';
 import { UsersModule } from '../users/users.module';
-import { AuthController } from './controllers';
+import { AuthController, SessionsController } from './controllers';
 import { JwtAuthGuard } from './guards';
 import { AuthService, SessionsService, TokenService } from './services';
 import { JwtStrategy } from './strategies';
@@ -27,7 +27,7 @@ import { JwtStrategy } from './strategies';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, SessionsController],
   providers: [
     AuthService,
     TokenService,

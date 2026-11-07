@@ -13,7 +13,8 @@ export type SessionRevokeReason =
   | 'refresh_token_reuse'
   | 'revoked_by_user'
   | 'password_change'
-  | 'account_deleted';
+  | 'account_deleted'
+  | 'key_rotation';
 
 export interface CreatedSession {
   sessionId: string;
@@ -128,12 +129,13 @@ export class SessionsService {
     return this.issue(session.user_id, session.id, newSecret);
   }
 
+  /** Devuelve cuántas sesiones se revocaron (0 si no existía o ya estaba cerrada). */
   async revoke(
     sessionId: string,
     reason: SessionRevokeReason,
     userId?: string,
-  ): Promise<void> {
-    await this.prisma.sessions.updateMany({
+  ): Promise<number> {
+    const { count } = await this.prisma.sessions.updateMany({
       where: {
         id: sessionId,
         revoked_at: null,
@@ -141,6 +143,40 @@ export class SessionsService {
       },
       data: { revoked_at: new Date(), revoke_reason: reason },
     });
+    return count;
+  }
+
+  /** Sesiones abiertas y vigentes del usuario, la más usada recientemente primero. */
+  listActive(userId: string) {
+    return this.prisma.sessions.findMany({
+      where: {
+        user_id: userId,
+        revoked_at: null,
+        expires_at: { gt: new Date() },
+      },
+      orderBy: [{ last_used_at: 'desc' }, { created_at: 'desc' }],
+      select: {
+        id: true,
+        device_name: true,
+        created_at: true,
+        last_used_at: true,
+        expires_at: true,
+      },
+    });
+  }
+
+  /** Cierra todas las sesiones del usuario excepto la indicada. */
+  async revokeOthers(
+    userId: string,
+    keepSessionId: string,
+    reason: SessionRevokeReason,
+    tx: Prisma.TransactionClient = this.prisma,
+  ): Promise<number> {
+    const { count } = await tx.sessions.updateMany({
+      where: { user_id: userId, revoked_at: null, id: { not: keepSessionId } },
+      data: { revoked_at: new Date(), revoke_reason: reason },
+    });
+    return count;
   }
 
   async isActive(sessionId: string, userId: string): Promise<boolean> {
