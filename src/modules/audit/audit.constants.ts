@@ -17,6 +17,9 @@ export enum AuditEvent {
   TwoFactorVerify = '2fa.verify',
   TwoFactorDisable = '2fa.disable',
   TwoFactorRecoveryRegenerate = '2fa.recovery_regenerate',
+  AccountProfileUpdate = 'account.profile_update',
+  AccountPasswordChange = 'account.password_change',
+  AccountDelete = 'account.delete',
 }
 
 export type AuditOutcome = 'success' | 'failure';

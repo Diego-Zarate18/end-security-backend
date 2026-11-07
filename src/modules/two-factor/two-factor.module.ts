@@ -9,5 +9,6 @@ import { TotpSecretService, TwoFactorService } from './services';
   imports: [AuthModule, UsersModule, AuditModule],
   controllers: [TwoFactorController],
   providers: [TwoFactorService, TotpSecretService],
+  exports: [TwoFactorService],
 })
 export class TwoFactorModule {}

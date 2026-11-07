@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
-import { CreateUserData, UserResponseDto } from '../dto';
+import type { ClientInfoData } from '../../../common/decorators';
+import { AuditEvent } from '../../audit/audit.constants';
+import { AuditService } from '../../audit/services';
+import { CreateUserData, UpdateProfileDto, UserResponseDto } from '../dto';
 
 const withTwoFactor = {
   two_factor: { select: { status: true } },
@@ -15,7 +18,10 @@ const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+  ) {}
 
   create(
     data: CreateUserData,
@@ -75,6 +81,34 @@ export class UsersService {
 
   async getProfile(id: string): Promise<UserResponseDto> {
     return this.toProfile(await this.findActiveById(id));
+  }
+
+  async updateProfile(
+    actor: { id: string; sessionId: string },
+    dto: UpdateProfileDto,
+    client: ClientInfoData,
+  ): Promise<UserResponseDto> {
+    await this.findActiveById(actor.id);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.users.update({
+        where: { id: actor.id },
+        data: { display_name: dto.displayName },
+        include: withTwoFactor,
+      });
+      await this.auditService.record(
+        {
+          userId: actor.id,
+          sessionId: actor.sessionId,
+          event: AuditEvent.AccountProfileUpdate,
+          outcome: 'success',
+          metadata: { fields: 'displayName' },
+          client,
+        },
+        tx,
+      );
+      return user;
+    });
+    return this.toProfile(updated);
   }
 
   toProfile(user: UserWithTwoFactor): UserResponseDto {

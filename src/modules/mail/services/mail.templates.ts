@@ -49,6 +49,28 @@ export function registrationAttemptMail(): RenderedMail {
   };
 }
 
+/** Aviso tras cambiar la contraseña maestra. */
+export function passwordChangedMail(): RenderedMail {
+  const title = 'Cambió tu contraseña maestra';
+  const body = `La contraseña maestra de tu cuenta de ${APP_NAME} se cambió y se cerraron las sesiones de tus otros dispositivos. Si no fuiste tú, alguien tiene tu contraseña: recupera el acceso cuanto antes.`;
+  return {
+    subject: `${APP_NAME}: cambió tu contraseña maestra`,
+    html: layout(title, `<p style="margin:0">${body}</p>`),
+    text: `${title}\n\n${body}`,
+  };
+}
+
+/** Aviso tras borrar la cuenta. */
+export function accountDeletedMail(): RenderedMail {
+  const title = 'Tu cuenta fue eliminada';
+  const body = `Tu cuenta de ${APP_NAME} y tu bóveda se eliminaron de forma permanente y se cerraron todas las sesiones. Puedes volver a registrarte con este correo cuando quieras.`;
+  return {
+    subject: `${APP_NAME}: tu cuenta fue eliminada`,
+    html: layout(title, `<p style="margin:0">${body}</p>`),
+    text: `${title}\n\n${body}`,
+  };
+}
+
 /** "diego@endsecurity.com" → "di***@endsecurity.com" */
 export function maskEmail(email: string): string {
   const [local, domain] = email.split('@');

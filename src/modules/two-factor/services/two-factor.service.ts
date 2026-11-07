@@ -330,15 +330,35 @@ export class TwoFactorService {
     }
     await this.ensureNotLocked(actor.userId);
     await this.reauthenticate(actor, user.auth_hash, dto.authHash, event);
+    await this.verifySecondFactor(actor, dto.code, event);
+  }
 
+  /**
+   * Comprueba un código TOTP o de recuperación y lo gasta. Lo usan también
+   * operaciones de cuenta (cambiar contraseña, borrar cuenta) con 2FA activo.
+   * Los fallos cuentan para el bloqueo de 15 minutos.
+   */
+  async verifySecondFactor(
+    actor: TwoFactorActor,
+    code: string,
+    event: AuditEvent,
+  ): Promise<void> {
+    await this.ensureNotLocked(actor.userId);
     const record = await this.prisma.two_factor.findUniqueOrThrow({
       where: { user_id: actor.userId },
     });
-    const ok = /^\d{6}$/.test(dto.code)
-      ? (await this.consumeTotp(record, dto.code)) !== null
-      : await this.consumeRecoveryCode(actor.userId, dto.code);
+    const ok = /^\d{6}$/.test(code)
+      ? (await this.consumeTotp(record, code)) !== null
+      : await this.consumeRecoveryCode(actor.userId, code);
     if (!ok) {
-      await this.audit(actor, event, 'failure', 'invalid_code');
+      await this.auditService.recordSafely({
+        userId: actor.userId,
+        sessionId: actor.sessionId,
+        event,
+        outcome: 'failure',
+        metadata: { reason: 'invalid_second_factor' },
+        client: actor.client,
+      });
       throw this.invalidCode();
     }
   }
@@ -461,8 +481,12 @@ export class TwoFactorService {
     const failures = await this.prisma.audit_log.count({
       where: {
         user_id: userId,
-        event_type: { startsWith: '2fa.' },
         outcome: 'failure',
+        // Fallos en endpoints 2FA y códigos incorrectos en operaciones de cuenta
+        OR: [
+          { event_type: { startsWith: '2fa.' } },
+          { metadata: { path: ['reason'], equals: 'invalid_second_factor' } },
+        ],
         occurred_at: { gte: new Date(Date.now() - LOCK_MINUTES * 60_000) },
       },
     });
