@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 import type { ClientInfoData } from '../../../common/decorators';
@@ -32,6 +36,7 @@ export class UsersService {
         id: data.id,
         email: normalizeEmail(data.email),
         display_name: data.displayName,
+        marketing_opt_in: data.marketingOptIn,
         auth_hash: data.authHash,
         kdf_salt: data.kdfSalt,
         kdf_memory_kib: data.kdfMemoryKib,
@@ -89,11 +94,22 @@ export class UsersService {
     dto: UpdateProfileDto,
     client: ClientInfoData,
   ): Promise<UserResponseDto> {
+    const fields = Object.keys(dto).filter(
+      (key) => dto[key as keyof UpdateProfileDto] !== undefined,
+    );
+    if (fields.length === 0) {
+      throw new BadRequestException(
+        'Envía displayName o marketingOptIn para actualizar.',
+      );
+    }
     await this.findActiveById(actor.id);
     const updated = await this.prisma.$transaction(async (tx) => {
       const user = await tx.users.update({
         where: { id: actor.id },
-        data: { display_name: dto.displayName },
+        data: {
+          display_name: dto.displayName,
+          marketing_opt_in: dto.marketingOptIn,
+        },
         include: withTwoFactor,
       });
       await this.auditService.record(
@@ -102,7 +118,7 @@ export class UsersService {
           sessionId: actor.sessionId,
           event: AuditEvent.AccountProfileUpdate,
           outcome: 'success',
-          metadata: { fields: 'displayName' },
+          metadata: { fields: fields.join(',') },
           client,
         },
         tx,
@@ -117,6 +133,7 @@ export class UsersService {
       id: user.id,
       email: user.email,
       displayName: user.display_name,
+      marketingOptIn: user.marketing_opt_in,
       emailVerified: user.email_verified_at !== null,
       twoFactorEnabled: user.two_factor?.status === 'active',
       createdAt: user.created_at,

@@ -1,5 +1,6 @@
 import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDefined,
   IsEmail,
   IsInt,
@@ -65,6 +66,11 @@ export class RegisterDto {
   @IsString()
   @MaxLength(64)
   displayName?: string;
+
+  /** Finalidades secundarias del aviso de privacidad (DEC-64). */
+  @IsOptional()
+  @IsBoolean()
+  marketingOptIn?: boolean;
 
   /** Auth key derivado en el cliente (nunca la contraseña maestra). */
   @IsBase64Bytes(32, 64)
