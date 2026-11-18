@@ -122,11 +122,12 @@ export class AccountService {
 
     await this.prisma
       .$transaction(async (tx) => {
-        await this.emailCodes.consume(tx, entry.id, now);
+        // INV-20: primero users, después email_verifications
         await tx.users.update({
           where: { id: user.id },
           data: { email: entry.target_email, email_verified_at: now },
         });
+        await this.emailCodes.consume(tx, entry.id, now);
         await this.auditService.record(
           {
             userId: user.id,
