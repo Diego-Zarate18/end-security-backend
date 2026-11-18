@@ -5,6 +5,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -45,6 +46,13 @@ export class ProtectedVaultKeyDto {
 }
 
 export class RegisterDto {
+  /** Lo genera la app: forma parte de la AAD de la pvk y de cada elemento (DEC-05). */
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
+  @IsUUID()
+  userId: string;
+
   @Transform(normalizeEmail)
   @IsEmail({}, { message: 'El correo electrónico no es válido.' })
   @MaxLength(254)

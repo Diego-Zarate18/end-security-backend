@@ -131,6 +131,7 @@ export class AuthService implements OnModuleInit {
       user = await this.prisma.$transaction(async (tx) => {
         const created = await this.usersService.create(
           {
+            id: dto.userId,
             email: dto.email,
             displayName: dto.displayName,
             authHash,
@@ -156,13 +157,15 @@ export class AuthService implements OnModuleInit {
         return created;
       });
     } catch (error) {
-      // Dos registros simultáneos con el mismo correo: el segundo recibe el señuelo
+      // Correo tomado en paralelo, o userId repetido: misma respuesta señuelo
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
         const owner = await this.usersService.findByEmail(dto.email);
-        if (owner) return this.registrationDecoy(owner.id, dto, client);
+        return owner
+          ? this.registrationDecoy(owner.id, dto, client)
+          : this.decoyChallenge(dto);
       }
       throw error;
     }
@@ -452,6 +455,11 @@ export class AuthService implements OnModuleInit {
       }
     }
 
+    return this.decoyChallenge(dto);
+  }
+
+  /** Desafío que nunca se puede confirmar: el correo no recibe ningún código. */
+  private decoyChallenge(dto: RegisterDto): EmailVerificationRequiredDto {
     const decoyId = randomUUID();
     this.trackDecoy(decoyId);
     const masked = maskEmail(dto.email);

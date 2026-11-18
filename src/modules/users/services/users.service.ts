@@ -29,6 +29,7 @@ export class UsersService {
   ): Promise<UserWithTwoFactor> {
     return tx.users.create({
       data: {
+        id: data.id,
         email: normalizeEmail(data.email),
         display_name: data.displayName,
         auth_hash: data.authHash,
