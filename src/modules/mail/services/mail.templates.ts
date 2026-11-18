@@ -71,6 +71,32 @@ export function accountDeletedMail(): RenderedMail {
   };
 }
 
+/** Aviso al correo actual cuando se pide cambiarlo (DEC-63). */
+export function emailChangeRequestedMail(maskedNewEmail: string): RenderedMail {
+  const title = 'Se pidió cambiar tu correo';
+  const body = `Alguien con acceso a tu cuenta de ${APP_NAME} pidió cambiar su correo a ${maskedNewEmail}. El cambio solo se hace si se confirma el código enviado a ese correo. Si no fuiste tú, cambia tu contraseña maestra y cierra las demás sesiones.`;
+  return {
+    subject: `${APP_NAME}: se pidió cambiar tu correo`,
+    html: layout(title, `<p style="margin:0">${body}</p>`),
+    text: `${title}
+
+${body}`,
+  };
+}
+
+/** Aviso al correo anterior cuando el cambio se completa. */
+export function emailChangedMail(maskedNewEmail: string): RenderedMail {
+  const title = 'Cambió el correo de tu cuenta';
+  const body = `El correo de tu cuenta de ${APP_NAME} ahora es ${maskedNewEmail}. Este correo ya no recibirá avisos. Si no fuiste tú, alguien tiene tu contraseña maestra.`;
+  return {
+    subject: `${APP_NAME}: cambió el correo de tu cuenta`,
+    html: layout(title, `<p style="margin:0">${body}</p>`),
+    text: `${title}
+
+${body}`,
+  };
+}
+
 /** "diego@endsecurity.com" → "di***@endsecurity.com" */
 export function maskEmail(email: string): string {
   const [local, domain] = email.split('@');

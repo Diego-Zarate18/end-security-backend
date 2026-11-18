@@ -418,7 +418,7 @@ export class AuthService implements OnModuleInit {
       verification = await this.emailCodes.issue(
         { userId: user.id, client },
         user.email,
-        'skip',
+        { onCooldown: 'skip' },
       );
     } catch {
       verification = {

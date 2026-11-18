@@ -18,7 +18,8 @@ export type UserWithTwoFactor = Prisma.usersGetPayload<{
   include: typeof withTwoFactor;
 }>;
 
-const normalizeEmail = (email: string) => email.trim().toLowerCase();
+const normalizeEmail = (email: string) =>
+  email.trim().toLowerCase().normalize('NFC');
 
 @Injectable()
 export class UsersService {

@@ -22,6 +22,7 @@ export enum AuditEvent {
   TwoFactorRecoveryRegenerate = '2fa.recovery_regenerate',
   AccountProfileUpdate = 'account.profile_update',
   AccountPasswordChange = 'account.password_change',
+  AccountEmailChange = 'account.email_change',
   AccountDelete = 'account.delete',
 }
 

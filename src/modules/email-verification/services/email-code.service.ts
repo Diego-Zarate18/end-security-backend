@@ -19,7 +19,16 @@ export const CODE_TTL_MINUTES = 15;
 export const MAX_ATTEMPTS = 5;
 export const RESEND_COOLDOWN_SECONDS = 60;
 
-const PURPOSE = 'verify_email';
+/** Verificar el correo del registro, o el correo nuevo al cambiarlo (DEC-63). */
+export type EmailCodePurpose = 'verify_email' | 'change_email';
+
+export interface IssueOptions {
+  /** 'skip': dentro de los 60 s no falla, responde codeSent: false. */
+  onCooldown?: 'throw' | 'skip';
+  purpose?: EmailCodePurpose;
+  /** false: crea el código sin enviarlo (correo nuevo ya en uso, misma respuesta). */
+  deliver?: boolean;
+}
 
 export interface EmailCodeActor {
   userId: string;
@@ -75,11 +84,15 @@ export class EmailCodeService {
   async issue(
     actor: EmailCodeActor,
     target: string,
-    onCooldown: 'throw' | 'skip' = 'throw',
+    {
+      onCooldown = 'throw',
+      purpose = 'verify_email',
+      deliver = true,
+    }: IssueOptions = {},
   ): Promise<CodeSentDto> {
     const now = new Date();
     const latest = await this.prisma.email_verifications.findFirst({
-      where: { user_id: actor.userId, purpose: PURPOSE },
+      where: { user_id: actor.userId, purpose },
       orderBy: { created_at: 'desc' },
       select: { created_at: true, expires_at: true },
     });
@@ -107,7 +120,7 @@ export class EmailCodeService {
       this.prisma.email_verifications.updateMany({
         where: {
           user_id: actor.userId,
-          purpose: PURPOSE,
+          purpose,
           consumed_at: null,
           expires_at: { gt: now },
         },
@@ -117,7 +130,7 @@ export class EmailCodeService {
         data: {
           id,
           user_id: actor.userId,
-          purpose: PURPOSE,
+          purpose,
           target_email: target,
           code_hash: this.hash(id, code),
           attempts: 0,
@@ -127,11 +140,13 @@ export class EmailCodeService {
     ]);
 
     try {
-      await this.mailService.send({
-        to: target,
-        ...verificationCodeMail(code, CODE_TTL_MINUTES),
-        idempotencyKey: `${PURPOSE}/${id}`,
-      });
+      if (deliver) {
+        await this.mailService.send({
+          to: target,
+          ...verificationCodeMail(code, CODE_TTL_MINUTES),
+          idempotencyKey: `${purpose}/${id}`,
+        });
+      }
     } catch (error) {
       // Un código que nunca llegó no debe quedar vigente
       await this.prisma.email_verifications.update({
@@ -142,7 +157,7 @@ export class EmailCodeService {
         userId: actor.userId,
         event: AuditEvent.EmailVerifyRequest,
         outcome: 'failure',
-        metadata: { reason: 'mail_send_failed' },
+        metadata: { reason: 'mail_send_failed', purpose },
         client: actor.client,
       });
       throw error;
@@ -152,6 +167,7 @@ export class EmailCodeService {
       userId: actor.userId,
       event: AuditEvent.EmailVerifyRequest,
       outcome: 'success',
+      metadata: { purpose },
       client: actor.client,
     });
 
@@ -170,11 +186,12 @@ export class EmailCodeService {
   async check(
     actor: EmailCodeActor,
     code: string,
+    purpose: EmailCodePurpose = 'verify_email',
   ): Promise<email_verifications> {
     const entry = await this.prisma.email_verifications.findFirst({
       where: {
         user_id: actor.userId,
-        purpose: PURPOSE,
+        purpose,
         consumed_at: null,
         expires_at: { gt: new Date() },
       },
@@ -201,7 +218,7 @@ export class EmailCodeService {
         userId: actor.userId,
         event: AuditEvent.EmailVerifyConfirm,
         outcome: 'failure',
-        metadata: { attempt: entry.attempts + 1 },
+        metadata: { attempt: entry.attempts + 1, purpose },
         client: actor.client,
       });
       throw invalidEmailCode();
