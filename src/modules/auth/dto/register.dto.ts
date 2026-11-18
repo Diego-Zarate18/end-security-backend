@@ -18,20 +18,20 @@ export class KdfParamsDto {
   @IsBase64Bytes(16, 64)
   salt: string;
 
-  // Mínimos OWASP para Argon2id: 19 MiB, 2 iteraciones, 1 hilo
+  // Piso de DEC-05: 64 MiB, 3 iteraciones, 1 hilo (la app no usa más hilos)
   @IsInt()
-  @Min(19456)
+  @Min(65536)
   @Max(1048576)
   memoryKib: number;
 
   @IsInt()
-  @Min(2)
+  @Min(3)
   @Max(10)
   iterations: number;
 
   @IsInt()
   @Min(1)
-  @Max(16)
+  @Max(1)
   parallelism: number;
 }
 
