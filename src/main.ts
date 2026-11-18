@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters';
 import { TransformInterceptor } from './common/interceptors';
+import { Severity, syslog, syslogMiddleware } from './common/syslog/syslog';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -14,6 +15,9 @@ async function bootstrap() {
 
   // 0. Proxies de confianza (Railway = 1) para que req.ip y el rate limit usen la IP real
   app.set('trust proxy', configService.get<number>('TRUST_PROXY', 0));
+
+  // 0.05 Syslog RFC 5424 (DEC-62): antes de los límites, para registrar también sus 429
+  app.use(syslogMiddleware);
 
   // 0.1 Límite del cuerpo JSON: lotes de sincronización de la bóveda (50 x 32 KiB en base64)
   app.useBodyParser('json', { limit: '3mb' });
@@ -88,8 +92,11 @@ async function bootstrap() {
 
   const port = configService.get<number>('PORT', 3000);
   await app.listen(port);
-  console.log(
-    `[EndSecurityAPI] Servidor activo en http://localhost:${port}/api`,
-  );
+  syslog(Severity.Notice, 'startup', {}, `API activa en el puerto ${port}`);
 }
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  // Falta un secreto, la BD no responde, etc.: el servicio no puede funcionar
+  syslog(Severity.Crit, 'startup', {}, 'La API no pudo arrancar');
+  console.error(error);
+  process.exit(1);
+});
