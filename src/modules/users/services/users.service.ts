@@ -9,6 +9,7 @@ import type { ClientInfoData } from '../../../common/decorators';
 import { AuditEvent } from '../../audit/audit.constants';
 import { AuditService } from '../../audit/services';
 import { CreateUserData, UpdateProfileDto, UserResponseDto } from '../dto';
+import { normalizeEmailText as normalizeEmail } from '../../auth/dto/normalize';
 
 const withTwoFactor = {
   two_factor: { select: { status: true } },
@@ -17,9 +18,6 @@ const withTwoFactor = {
 export type UserWithTwoFactor = Prisma.usersGetPayload<{
   include: typeof withTwoFactor;
 }>;
-
-const normalizeEmail = (email: string) =>
-  email.trim().toLowerCase().normalize('NFC');
 
 @Injectable()
 export class UsersService {
