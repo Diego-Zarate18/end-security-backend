@@ -16,7 +16,7 @@ import type { ClientInfoData } from '../../../common/decorators';
 import { PrismaService } from '../../../database/prisma.service';
 import { AuditEvent } from '../../audit/audit.constants';
 import { AuditService } from '../../audit/services';
-import { verifyAuthHash } from '../../auth/auth-hash';
+import { isAccountLocked, verifyAuthHash } from '../../auth/auth-hash';
 import { TokenType } from '../../auth/auth.constants';
 import { AuthResponseDto } from '../../auth/dto';
 import { AuthService, TokenService } from '../../auth/services';
@@ -369,8 +369,14 @@ export class TwoFactorService {
     authHash: string,
     event: AuditEvent,
   ): Promise<void> {
-    if (!(await verifyAuthHash(storedHash, authHash))) {
-      await this.audit(actor, event, 'failure', 'invalid_credentials');
+    const locked = await isAccountLocked(this.prisma, actor.userId);
+    if (locked || !(await verifyAuthHash(storedHash, authHash))) {
+      await this.audit(
+        actor,
+        event,
+        'failure',
+        locked ? 'account_locked' : 'invalid_credentials',
+      );
       // 403 y no 401: la sesión sigue siendo válida
       throw new ForbiddenException('La contraseña maestra no es correcta.');
     }

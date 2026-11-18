@@ -29,7 +29,7 @@ import {
   UsersService,
   UserWithTwoFactor,
 } from '../../users/services/users.service';
-import { verifyAuthHash } from '../auth-hash';
+import { isAccountLocked, verifyAuthHash } from '../auth-hash';
 import {
   DEFAULT_KDF_PARAMS,
   EMAIL_CHALLENGE_TTL_SECONDS,
@@ -179,10 +179,19 @@ export class AuthService implements OnModuleInit {
 
     if (!user) {
       await verifyAuthHash(this.dummyHash, dto.authHash);
-      // Sin user_id no hay cadena donde registrarlo: solo log del servidor, sin el correo
-      this.logger.warn(
-        `[auth.login] intento con correo inexistente desde ${client.ipAddress}`,
-      );
+      throw invalidCredentials();
+    }
+
+    // Cuenta bloqueada: misma respuesta y mismo costo que una contraseña incorrecta
+    if (await isAccountLocked(this.prisma, user.id)) {
+      await verifyAuthHash(this.dummyHash, dto.authHash);
+      await this.auditService.recordSafely({
+        userId: user.id,
+        event: AuditEvent.AuthLogin,
+        outcome: 'failure',
+        metadata: { reason: 'account_locked', deviceName: dto.deviceName },
+        client,
+      });
       throw invalidCredentials();
     }
 
