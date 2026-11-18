@@ -164,7 +164,7 @@ export function syslogMiddleware(
   res.on('finish', () => {
     const route = (req.route as { path?: string } | undefined)?.path;
     const msgid = (route && OPERATIONS[`${req.method} ${route}`]) || 'http';
-    const user = req.user as { id?: string; sessionId?: string } | undefined;
+    const user = (req as { user?: { id?: string; sessionId?: string } }).user;
     const errorCode = res.locals.errorCode as string | undefined;
     const status = res.statusCode;
     syslog(
