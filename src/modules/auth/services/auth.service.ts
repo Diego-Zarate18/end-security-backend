@@ -133,7 +133,7 @@ export class AuthService implements OnModuleInit {
           {
             id: dto.userId,
             email: dto.email,
-            displayName: dto.displayName,
+            displayName: dto.displayName ?? '',
             authHash,
             kdfSalt: fromBase64(dto.kdf.salt),
             kdfMemoryKib: dto.kdf.memoryKib,

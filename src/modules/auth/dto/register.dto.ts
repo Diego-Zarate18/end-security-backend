@@ -4,6 +4,7 @@ import {
   IsEmail,
   IsInt,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   Max,
@@ -58,11 +59,12 @@ export class RegisterDto {
   @MaxLength(254)
   email: string;
 
+  /** Opcional: la app no lo pide al registrarse. */
   @Transform(trimString)
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'El nombre para mostrar es requerido.' })
   @MaxLength(64)
-  displayName: string;
+  displayName?: string;
 
   /** Auth key derivado en el cliente (nunca la contraseña maestra). */
   @IsBase64Bytes(32, 64)
