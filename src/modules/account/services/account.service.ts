@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { randomUUID } from 'crypto';
 import type { ClientInfoData } from '../../../common/decorators';
 import { fromBase64 } from '../../../common/utils';
 import { PrismaService } from '../../../database/prisma.service';
@@ -30,7 +29,7 @@ import {
 } from '../../email-verification/services';
 import { CodeSentDto } from '../../email-verification/dto';
 import { UserResponseDto } from '../../users/dto';
-import { UsersService } from '../../users/services';
+import { anonymizedUserData, UsersService } from '../../users/services';
 import { ReauthService } from './reauth.service';
 import {
   ChangeMasterPasswordDto,
@@ -312,7 +311,6 @@ export class AccountService {
 
     const email = user.email;
     const now = new Date();
-    const empty = new Uint8Array(0);
 
     await this.prisma.$transaction(async (tx) => {
       await this.auditService.record(
@@ -337,18 +335,7 @@ export class AccountService {
       await tx.sessions.deleteMany({ where: { user_id: user.id } });
       await tx.users.update({
         where: { id: user.id },
-        data: {
-          email: `deleted+${randomUUID()}@deleted.invalid`,
-          display_name: 'Cuenta eliminada',
-          // No es un hash PHC válido: ningún login puede coincidir
-          auth_hash: '!deleted',
-          kdf_salt: empty,
-          pvk_ciphertext: empty,
-          pvk_nonce: empty,
-          email_verified_at: null,
-          deleted_at: now,
-          anonymized_at: now,
-        },
+        data: anonymizedUserData(now),
       });
     });
 

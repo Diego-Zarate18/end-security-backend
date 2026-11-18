@@ -18,6 +18,8 @@ import {
   EmailCodeService,
   invalidEmailCode,
   RESEND_COOLDOWN_SECONDS,
+  resendCapAllowedAt,
+  resendLimitReached,
   resendTooSoon,
 } from '../../email-verification/services';
 import {
@@ -66,8 +68,8 @@ export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
   /** Hash señuelo para igualar el tiempo de respuesta cuando el correo no existe. */
   private dummyHash = '';
-  /** Último reenvío simulado por desafío señuelo (registro con correo existente). */
-  private readonly decoySends = new Map<string, number>();
+  /** Envíos simulados por desafío señuelo (registro con correo existente), para el mismo tope que los reales. */
+  private readonly decoySends = new Map<string, number[]>();
   /** Último aviso de intento de registro enviado a cada dueño. */
   private readonly registrationNotices = new Map<string, number>();
 
@@ -121,8 +123,15 @@ export class AuthService implements OnModuleInit {
       SERVER_ARGON2_OPTIONS,
     );
 
+    // Una cuenta sin verificar con más de 24 h se reemplaza; una verificada nunca
     const existing = await this.usersService.findByEmail(dto.email);
-    if (existing) {
+    if (
+      existing &&
+      !(await this.usersService.anonymizeIfExpiredUnverified(
+        existing.id,
+        client,
+      ))
+    ) {
       return this.registrationDecoy(existing.id, dto, client);
     }
 
@@ -290,11 +299,16 @@ export class AuthService implements OnModuleInit {
         user.email,
       );
     } else {
-      // Señuelo: mismo límite de 60 s y misma respuesta, sin enviar nada
-      const last = this.decoySends.get(claims.userId) ?? 0;
-      const waited = Math.floor((Date.now() - last) / 1000);
+      // Señuelo: mismos límites (60 s y topes) y misma respuesta, sin enviar nada
+      const sends = this.decoySends.get(claims.userId) ?? [];
+      const now = Date.now();
+      const waited = Math.floor((now - (sends.at(-1) ?? 0)) / 1000);
       if (waited < RESEND_COOLDOWN_SECONDS) {
         throw resendTooSoon(RESEND_COOLDOWN_SECONDS - waited);
+      }
+      const allowedAt = resendCapAllowedAt(sends);
+      if (allowedAt > now) {
+        throw resendLimitReached(Math.ceil((allowedAt - now) / 1000));
       }
       this.trackDecoy(claims.userId);
       verification = this.decoyVerification(claims.maskedEmail);
@@ -500,11 +514,14 @@ export class AuthService implements OnModuleInit {
   /** Recuerda el último "envío" de un señuelo; olvida los que ya vencieron. */
   private trackDecoy(decoyId: string): void {
     const now = Date.now();
-    for (const [id, at] of this.decoySends) {
-      if (now - at > EMAIL_CHALLENGE_TTL_SECONDS * 1000)
+    for (const [id, sends] of this.decoySends) {
+      if (now - sends[sends.length - 1] > EMAIL_CHALLENGE_TTL_SECONDS * 1000)
         this.decoySends.delete(id);
     }
-    this.decoySends.set(decoyId, now);
+    this.decoySends.set(decoyId, [
+      ...(this.decoySends.get(decoyId) ?? []),
+      now,
+    ]);
   }
 
   private kdfOf(user: UserWithTwoFactor): KdfParamsResponseDto {

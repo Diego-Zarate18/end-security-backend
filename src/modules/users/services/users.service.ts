@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../../database/prisma.service';
 import type { ClientInfoData } from '../../../common/decorators';
 import { AuditEvent } from '../../audit/audit.constants';
@@ -18,6 +19,26 @@ const withTwoFactor = {
 export type UserWithTwoFactor = Prisma.usersGetPayload<{
   include: typeof withTwoFactor;
 }>;
+
+/** Plazo para verificar el correo; pasado, otro registro con ese correo reemplaza a la cuenta. */
+export const UNVERIFIED_TTL_MS = 24 * 3_600_000;
+
+/** Fila anonimizada: se conserva por la cadena de auditoría y las FK, sin datos de la persona. */
+export function anonymizedUserData(now: Date) {
+  const empty = new Uint8Array(0);
+  return {
+    email: `deleted+${randomUUID()}@deleted.invalid`,
+    display_name: 'Cuenta eliminada',
+    // No es un hash PHC válido: ningún login puede coincidir
+    auth_hash: '!deleted',
+    kdf_salt: empty,
+    pvk_ciphertext: empty,
+    pvk_nonce: empty,
+    email_verified_at: null,
+    deleted_at: now,
+    anonymized_at: now,
+  } satisfies Prisma.usersUpdateManyMutationInput;
+}
 
 @Injectable()
 export class UsersService {
@@ -48,6 +69,49 @@ export class UsersService {
         purged_through_revision: 0n,
       },
       include: withTwoFactor,
+    });
+  }
+
+  /**
+   * Libera el correo de una cuenta que nunca se verificó en 24 h: la anonimiza
+   * (sin tocar nada que no sea suya). Un solo UPDATE condicionado decide: una
+   * cuenta verificada, con bóveda, eliminada o vigente no lo cumple y no se toca.
+   * Devuelve si la reemplazó.
+   */
+  anonymizeIfExpiredUnverified(
+    userId: string,
+    client: ClientInfoData,
+  ): Promise<boolean> {
+    const now = new Date();
+    return this.prisma.$transaction(async (tx) => {
+      // INV-20: primero users (el UPDATE toma el candado), después lo demás
+      const { count } = await tx.users.updateMany({
+        where: {
+          id: userId,
+          email_verified_at: null,
+          deleted_at: null,
+          created_at: { lt: new Date(now.getTime() - UNVERIFIED_TTL_MS) },
+          vault_items: { none: {} },
+        },
+        data: anonymizedUserData(now),
+      });
+      if (count === 0) return false;
+      await this.auditService.record(
+        {
+          userId,
+          event: AuditEvent.AccountDelete,
+          outcome: 'success',
+          metadata: { reason: 'unverified_expired' },
+          client,
+        },
+        tx,
+      );
+      await tx.email_verifications.deleteMany({ where: { user_id: userId } });
+      await tx.audit_log_pii.deleteMany({
+        where: { audit_log: { user_id: userId } },
+      });
+      await tx.sessions.deleteMany({ where: { user_id: userId } });
+      return true;
     });
   }
 

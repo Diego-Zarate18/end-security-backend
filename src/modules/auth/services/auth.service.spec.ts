@@ -23,10 +23,13 @@ function build() {
   const usersService = {
     findByEmail: jest.fn().mockResolvedValue(null),
     findActiveByEmail: jest.fn(),
+    findActiveByIdOrNull: jest.fn(),
+    anonymizeIfExpiredUnverified: jest.fn().mockResolvedValue(false),
     create: jest.fn(),
   };
   const tokenService = {
     signEmailVerificationChallenge: jest.fn().mockReturnValue('challenge'),
+    verifyChallenge: jest.fn(),
   };
   const auditService = {
     record: jest.fn(),
@@ -44,7 +47,14 @@ function build() {
     emailCodes as never,
     { send: jest.fn() } as never,
   );
-  return { service, prisma, usersService, auditService, emailCodes };
+  return {
+    service,
+    prisma,
+    usersService,
+    tokenService,
+    auditService,
+    emailCodes,
+  };
 }
 
 describe('AuthService.register', () => {
@@ -85,6 +95,72 @@ describe('AuthService.register', () => {
       verification: { codeSent: true },
     });
     expect(emailCodes.issue).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthService.register con una cuenta sin verificar vencida', () => {
+  it('la reemplaza: el registro sigue como un correo libre', async () => {
+    const { service, usersService, emailCodes } = build();
+    usersService.findByEmail.mockResolvedValue({ id: 'vieja' });
+    usersService.anonymizeIfExpiredUnverified.mockResolvedValue(true);
+    usersService.create.mockResolvedValue({
+      id: registerDto.userId,
+      email: registerDto.email,
+    });
+
+    await service.register(registerDto, client);
+
+    expect(usersService.anonymizeIfExpiredUnverified).toHaveBeenCalledWith(
+      'vieja',
+      client,
+    );
+    expect(usersService.create).toHaveBeenCalled();
+    expect(emailCodes.issue).toHaveBeenCalled();
+  });
+
+  it('si no vence (vigente o verificada) responde el señuelo y no crea nada', async () => {
+    const { service, usersService, emailCodes } = build();
+    usersService.findByEmail.mockResolvedValue({ id: 'ajena' });
+    usersService.anonymizeIfExpiredUnverified.mockResolvedValue(false);
+
+    const result = await service.register(registerDto, client);
+
+    expect(result.verification.codeSent).toBe(true);
+    expect(usersService.create).not.toHaveBeenCalled();
+    expect(emailCodes.issue).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthService.resendEmailCode con un desafío señuelo', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('pasa al 429 con retryAfterSeconds al llegar al tope, igual que una cuenta real', async () => {
+    const { service, usersService, tokenService } = build();
+    usersService.findByEmail.mockResolvedValue({ id: 'ajena' });
+    let now = Date.now();
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
+
+    await service.register(registerDto, client); // envío 1
+    const decoyId = (
+      tokenService.signEmailVerificationChallenge.mock.calls[0] as string[]
+    )[0];
+    tokenService.verifyChallenge.mockReturnValue({ userId: decoyId });
+    usersService.findActiveByIdOrNull.mockResolvedValue(null);
+    const resend = () =>
+      service.resendEmailCode({ challengeToken: 'token' }, client);
+
+    for (let i = 0; i < 4; i++) {
+      now += 61_000; // pasa los 60 s de espera
+      await expect(resend()).resolves.toBeDefined(); // envíos 2 a 5
+    }
+    now += 61_000;
+    await expect(resend()).rejects.toMatchObject({
+      status: 429,
+      response: {
+        error: 'TooManyRequests',
+        details: { retryAfterSeconds: expect.any(Number) as number },
+      },
+    });
   });
 });
 
