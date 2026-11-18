@@ -1,8 +1,10 @@
 import { Transform, Type } from 'class-transformer';
 import {
   IsDefined,
+  IsInt,
   IsOptional,
   Matches,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { IsBase64Bytes } from '../../../common/validators';
@@ -50,6 +52,12 @@ export class ChangeMasterPasswordDto extends SecondFactorDto {
   @ValidateNested()
   @Type(() => ProtectedVaultKeyDto)
   pvk: ProtectedVaultKeyDto;
+
+  /** key_version con la que la app envolvió la pvk; si otro teléfono cambió antes, 409. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedKeyVersion?: number;
 }
 
 export class PasswordChangedDto {

@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'crypto';
 import type { ClientInfoData } from '../../../common/decorators';
@@ -64,20 +70,45 @@ export class AccountService {
     );
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.users.update({
-        where: { id: user.id },
-        data: {
-          auth_hash: authHash,
-          kdf_salt: fromBase64(dto.kdf.salt),
-          kdf_memory_kib: dto.kdf.memoryKib,
-          kdf_iterations: dto.kdf.iterations,
-          kdf_parallelism: dto.kdf.parallelism,
-          pvk_ciphertext: fromBase64(dto.pvk.ciphertext),
-          pvk_nonce: fromBase64(dto.pvk.nonce),
-          key_version: { increment: 1 },
-        },
-        select: { key_version: true },
-      });
+      // Con expectedKeyVersion, el UPDATE solo aplica si nadie cambió las llaves antes
+      const updated = await tx.users
+        .update({
+          where: {
+            id: user.id,
+            ...(dto.expectedKeyVersion !== undefined
+              ? { key_version: dto.expectedKeyVersion }
+              : {}),
+          },
+          data: {
+            auth_hash: authHash,
+            kdf_salt: fromBase64(dto.kdf.salt),
+            kdf_memory_kib: dto.kdf.memoryKib,
+            kdf_iterations: dto.kdf.iterations,
+            kdf_parallelism: dto.kdf.parallelism,
+            pvk_ciphertext: fromBase64(dto.pvk.ciphertext),
+            pvk_nonce: fromBase64(dto.pvk.nonce),
+            key_version: { increment: 1 },
+          },
+          select: { key_version: true },
+        })
+        .catch(async (error: unknown) => {
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2025'
+          ) {
+            const current = await tx.users.findUniqueOrThrow({
+              where: { id: user.id },
+              select: { key_version: true },
+            });
+            throw new ConflictException({
+              error: 'KeyVersionMismatch',
+              message:
+                'Las llaves de la cuenta cambiaron en otro dispositivo. Inicia sesión de nuevo y repite el cambio.',
+              details: { currentKeyVersion: current.key_version },
+            });
+          }
+          throw error;
+        });
 
       // Quien tuviera la contraseña anterior pierde sus sesiones
       const { count } = await tx.sessions.updateMany({
