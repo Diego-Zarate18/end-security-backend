@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters';
+import { validationPipeOptions } from './common/validation-pipe.options';
 import { TransformInterceptor } from './common/interceptors';
 import { Severity, syslog, syslogMiddleware } from './common/syslog/syslog';
 
@@ -92,16 +93,7 @@ async function bootstrap() {
   );
 
   // 6. Validación global estricta de DTOs (bloquea parámetros no autorizados)
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    }),
-  );
+  app.useGlobalPipes(new ValidationPipe(validationPipeOptions));
 
   // 7. Filtro global de excepciones sanitizado
   app.useGlobalFilters(new HttpExceptionFilter());
