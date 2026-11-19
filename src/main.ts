@@ -14,7 +14,20 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   // 0. Proxies de confianza (Railway = 1) para que req.ip y el rate limit usen la IP real
-  app.set('trust proxy', configService.get<number>('TRUST_PROXY', 0));
+  const trustProxy = configService.get<number>('TRUST_PROXY', 0);
+  app.set('trust proxy', trustProxy);
+  if (
+    configService.get<string>('NODE_ENV') === 'production' &&
+    trustProxy === 0
+  ) {
+    // No falla: solo avisa. Detrás de Railway, sin esto el límite por IP vería a todos como una sola IP
+    syslog(
+      Severity.Warning,
+      'startup',
+      {},
+      'TRUST_PROXY=0 en producción: el límite por IP no verá la IP real (detrás de Railway debe ser 1)',
+    );
+  }
 
   // 0.05 Syslog RFC 5424 (DEC-62): antes de los límites, para registrar también sus 429
   app.use(syslogMiddleware);
@@ -25,13 +38,19 @@ async function bootstrap() {
   // 1. Cabeceras HTTP de seguridad con Helmet
   app.use(helmet());
 
-  // 2. Configuración estricta de CORS
-  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
-  app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(','),
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    credentials: true,
-  });
+  // 2. CORS estricto: la app es nativa y no lo necesita; sin orígenes, no se habilita
+  const corsOrigin = configService.get<string>('CORS_ORIGIN', '');
+  const origins = corsOrigin
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (origins.length > 0) {
+    app.enableCors({
+      origin: origins.includes('*') ? true : origins,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+      credentials: true,
+    });
+  }
 
   // 3. Prefijo global para todos los endpoints
   app.setGlobalPrefix('api');
