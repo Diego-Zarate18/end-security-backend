@@ -15,7 +15,7 @@ export enum TokenType {
 export const DEFAULT_KDF_PARAMS = {
   memoryKib: 65536,
   iterations: 3,
-  parallelism: 4,
+  parallelism: 1,
 } as const;
 
 /** Argon2id del lado del servidor sobre el auth key que envía el cliente. */

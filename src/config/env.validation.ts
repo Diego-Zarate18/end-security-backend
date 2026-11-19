@@ -118,24 +118,43 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   if (validatedConfig.NODE_ENV === Environment.Production) {
-    const placeholders = [
+    // Solo nombres de variables: nunca se imprime un valor
+    const problems: string[] = [];
+    if (!validatedConfig.RESEND_API_KEY) {
+      problems.push(
+        'RESEND_API_KEY es obligatoria (sin ella los correos no salen)',
+      );
+    }
+    if (typeof config.EMAIL_FROM !== 'string' || !config.EMAIL_FROM.trim()) {
+      problems.push(
+        'EMAIL_FROM es obligatoria (remitente con dominio verificado)',
+      );
+    }
+    const secrets = [
       validatedConfig.JWT_SECRET,
       validatedConfig.JWT_REFRESH_SECRET,
       validatedConfig.AUDIT_HMAC_KEY,
-    ].some((secret) => secret.includes('change_in_production'));
-    if (!validatedConfig.RESEND_API_KEY) {
-      throw new Error(
-        '[ConfigValidationError] En producción RESEND_API_KEY es obligatoria.',
-      );
-    }
+    ];
     if (
-      placeholders ||
+      secrets.some((secret) => secret.includes('change_in_production')) ||
       validatedConfig.JWT_SECRET === validatedConfig.JWT_REFRESH_SECRET
     ) {
-      throw new Error(
-        '[ConfigValidationError] En producción los secretos JWT deben ser propios y distintos entre sí.',
+      problems.push(
+        'JWT_SECRET, JWT_REFRESH_SECRET y AUDIT_HMAC_KEY deben ser propios y distintos entre sí',
       );
     }
+    if (config.CORS_ORIGIN === '*') {
+      problems.push(
+        'CORS_ORIGIN no puede ser * (la app es nativa: déjala vacía o pon un origen fijo)',
+      );
+    }
+    if (problems.length > 0) {
+      throw new Error(
+        `[ConfigValidationError] En producción: ${problems.join('; ')}.`,
+      );
+    }
+    // La app no usa CORS: sin valor explícito, en producción no se abre ningún origen
+    if (config.CORS_ORIGIN === undefined) validatedConfig.CORS_ORIGIN = '';
   }
 
   return validatedConfig;

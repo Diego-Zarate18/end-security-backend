@@ -6,7 +6,8 @@ import {
 import type { ClientInfoData } from '../../../common/decorators';
 import { AuditEvent } from '../../audit/audit.constants';
 import { AuditService } from '../../audit/services';
-import { verifyAuthHash } from '../../auth/auth-hash';
+import { PrismaService } from '../../../database/prisma.service';
+import { isAccountLocked, verifyAuthHash } from '../../auth/auth-hash';
 import { TwoFactorService } from '../../two-factor/services';
 import { UserWithTwoFactor } from '../../users/services';
 
@@ -24,6 +25,7 @@ export interface ReauthActor {
 @Injectable()
 export class ReauthService {
   constructor(
+    private readonly prisma: PrismaService,
     private readonly twoFactor: TwoFactorService,
     private readonly auditService: AuditService,
   ) {}
@@ -35,13 +37,17 @@ export class ReauthService {
     code: string | undefined,
     event: AuditEvent,
   ): Promise<void> {
-    if (!(await verifyAuthHash(user.auth_hash, authHash))) {
+    // Bloqueada (BR-22): misma respuesta, pero no cuenta como fallo nuevo
+    const locked = await isAccountLocked(this.prisma, user.id);
+    if (locked || !(await verifyAuthHash(user.auth_hash, authHash))) {
       await this.auditService.recordSafely({
         userId: user.id,
         sessionId: actor.sessionId,
         event,
         outcome: 'failure',
-        metadata: { reason: 'invalid_credentials' },
+        metadata: {
+          reason: locked ? 'account_locked' : 'invalid_credentials',
+        },
         client: actor.client,
       });
       // 403 y no 401: la sesión sigue siendo válida

@@ -1,12 +1,17 @@
 import { Transform, Type } from 'class-transformer';
 import {
   IsDefined,
+  IsEmail,
+  IsInt,
   IsOptional,
   Matches,
+  MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { IsBase64Bytes } from '../../../common/validators';
 import { KdfParamsDto, ProtectedVaultKeyDto } from '../../auth/dto';
+import { normalizeEmail } from '../../auth/dto/normalize';
 
 /** 6 dígitos (TOTP) o un código de recuperación "k7m2q-x9rtb". */
 const SECOND_FACTOR = /^(\d{6}|[a-hj-km-np-z2-9]{5}-?[a-hj-km-np-z2-9]{5})$/i;
@@ -50,9 +55,32 @@ export class ChangeMasterPasswordDto extends SecondFactorDto {
   @ValidateNested()
   @Type(() => ProtectedVaultKeyDto)
   pvk: ProtectedVaultKeyDto;
+
+  /** key_version con la que la app envolvió la pvk; si otro teléfono cambió antes, 409. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedKeyVersion?: number;
 }
 
 export class PasswordChangedDto {
   keyVersion: number;
   otherSessionsRevoked: number;
+}
+
+/** POST /auth/email/change (EP-15, DEC-63): reautenticación y correo nuevo. */
+export class RequestEmailChangeDto extends SecondFactorDto {
+  @Transform(normalizeEmail)
+  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
+  @MaxLength(254)
+  newEmail: string;
+
+  @IsBase64Bytes(32, 64)
+  authHash: string;
+}
+
+/** POST /auth/email/change/confirm (EP-16): código enviado al correo nuevo. */
+export class ConfirmEmailChangeDto {
+  @Matches(/^\d{6}$/, { message: 'El código debe tener 6 dígitos.' })
+  code: string;
 }

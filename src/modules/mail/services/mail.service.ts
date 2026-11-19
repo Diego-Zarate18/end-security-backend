@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import { Severity, syslog } from '../../../common/syslog/syslog';
 
 export interface MailMessage {
   to: string;
@@ -69,6 +70,7 @@ export class MailService {
     if (failure) {
       // El detalle va al log del servidor; el cliente recibe un mensaje genérico
       this.logger.error(`[MailError] ${failure}`);
+      syslog(Severity.Err, 'mail', {}, 'No se pudo enviar un correo');
       throw new ServiceUnavailableException(
         'No se pudo enviar el correo. Intenta de nuevo en unos minutos.',
       );

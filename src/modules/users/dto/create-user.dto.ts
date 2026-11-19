@@ -3,8 +3,10 @@
  * validación ocurre en RegisterDto y aquí ya llega el material decodificado.
  */
 export interface CreateUserData {
+  id: string;
   email: string;
   displayName: string;
+  marketingOptIn: boolean;
   /** Hash Argon2id (formato PHC) calculado por el servidor. */
   authHash: string;
   kdfSalt: Uint8Array<ArrayBuffer>;

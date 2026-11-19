@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { toCode } from '../syslog/syslog';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -73,6 +74,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
       );
     }
 
+    // Para la línea de syslog de esta petición (solo el nombre, nunca el mensaje)
+    response.locals.errorCode = toCode(errorName);
     response.status(status).json({
       statusCode: status,
       error: errorName,

@@ -9,6 +9,7 @@ import { PrismaService } from '../../../database/prisma.service';
 import { AuditEvent, AuditOutcome } from '../audit.constants';
 import { AuditChainReportDto, AuditLogItemDto, AuditLogPageDto } from '../dto';
 import { computeAuditHash } from './audit-chain';
+import { Severity, syslog } from '../../../common/syslog/syslog';
 
 export interface AuditRecordInput {
   userId: string;
@@ -224,6 +225,12 @@ export class AuditService {
     id: bigint,
     reason: AuditChainReportDto['reason'],
   ): AuditChainReportDto {
+    syslog(
+      Severity.Crit,
+      'audit_verify',
+      {},
+      `Cadena de auditoría alterada en el registro ${id} (${reason})`,
+    );
     return {
       valid: false,
       checkedEntries: checked,

@@ -18,6 +18,8 @@ import {
   EmailCodeService,
   invalidEmailCode,
   RESEND_COOLDOWN_SECONDS,
+  resendCapAllowedAt,
+  resendLimitReached,
   resendTooSoon,
 } from '../../email-verification/services';
 import {
@@ -29,7 +31,7 @@ import {
   UsersService,
   UserWithTwoFactor,
 } from '../../users/services/users.service';
-import { verifyAuthHash } from '../auth-hash';
+import { isAccountLocked, verifyAuthHash } from '../auth-hash';
 import {
   DEFAULT_KDF_PARAMS,
   EMAIL_CHALLENGE_TTL_SECONDS,
@@ -66,8 +68,8 @@ export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
   /** Hash señuelo para igualar el tiempo de respuesta cuando el correo no existe. */
   private dummyHash = '';
-  /** Último reenvío simulado por desafío señuelo (registro con correo existente). */
-  private readonly decoySends = new Map<string, number>();
+  /** Envíos simulados por desafío señuelo (registro con correo existente), para el mismo tope que los reales. */
+  private readonly decoySends = new Map<string, number[]>();
   /** Último aviso de intento de registro enviado a cada dueño. */
   private readonly registrationNotices = new Map<string, number>();
 
@@ -121,8 +123,15 @@ export class AuthService implements OnModuleInit {
       SERVER_ARGON2_OPTIONS,
     );
 
+    // Una cuenta sin verificar con más de 24 h se reemplaza; una verificada nunca
     const existing = await this.usersService.findByEmail(dto.email);
-    if (existing) {
+    if (
+      existing &&
+      !(await this.usersService.anonymizeIfExpiredUnverified(
+        existing.id,
+        client,
+      ))
+    ) {
       return this.registrationDecoy(existing.id, dto, client);
     }
 
@@ -131,8 +140,10 @@ export class AuthService implements OnModuleInit {
       user = await this.prisma.$transaction(async (tx) => {
         const created = await this.usersService.create(
           {
+            id: dto.userId,
             email: dto.email,
-            displayName: dto.displayName,
+            displayName: dto.displayName ?? '',
+            marketingOptIn: dto.marketingOptIn ?? false,
             authHash,
             kdfSalt: fromBase64(dto.kdf.salt),
             kdfMemoryKib: dto.kdf.memoryKib,
@@ -156,13 +167,15 @@ export class AuthService implements OnModuleInit {
         return created;
       });
     } catch (error) {
-      // Dos registros simultáneos con el mismo correo: el segundo recibe el señuelo
+      // Correo tomado en paralelo, o userId repetido: misma respuesta señuelo
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
         const owner = await this.usersService.findByEmail(dto.email);
-        if (owner) return this.registrationDecoy(owner.id, dto, client);
+        return owner
+          ? this.registrationDecoy(owner.id, dto, client)
+          : this.decoyChallenge(dto);
       }
       throw error;
     }
@@ -175,10 +188,19 @@ export class AuthService implements OnModuleInit {
 
     if (!user) {
       await verifyAuthHash(this.dummyHash, dto.authHash);
-      // Sin user_id no hay cadena donde registrarlo: solo log del servidor, sin el correo
-      this.logger.warn(
-        `[auth.login] intento con correo inexistente desde ${client.ipAddress}`,
-      );
+      throw invalidCredentials();
+    }
+
+    // Cuenta bloqueada: misma respuesta y mismo costo que una contraseña incorrecta
+    if (await isAccountLocked(this.prisma, user.id)) {
+      await verifyAuthHash(this.dummyHash, dto.authHash);
+      await this.auditService.recordSafely({
+        userId: user.id,
+        event: AuditEvent.AuthLogin,
+        outcome: 'failure',
+        metadata: { reason: 'account_locked', deviceName: dto.deviceName },
+        client,
+      });
       throw invalidCredentials();
     }
 
@@ -233,11 +255,12 @@ export class AuthService implements OnModuleInit {
     const now = new Date();
 
     await this.prisma.$transaction(async (tx) => {
-      await this.emailCodes.consume(tx, entry.id, now);
+      // INV-20: primero users, después email_verifications
       await tx.users.update({
         where: { id: user.id },
         data: { email_verified_at: now },
       });
+      await this.emailCodes.consume(tx, entry.id, now);
       await this.auditService.record(
         {
           userId: user.id,
@@ -276,11 +299,16 @@ export class AuthService implements OnModuleInit {
         user.email,
       );
     } else {
-      // Señuelo: mismo límite de 60 s y misma respuesta, sin enviar nada
-      const last = this.decoySends.get(claims.userId) ?? 0;
-      const waited = Math.floor((Date.now() - last) / 1000);
+      // Señuelo: mismos límites (60 s y topes) y misma respuesta, sin enviar nada
+      const sends = this.decoySends.get(claims.userId) ?? [];
+      const now = Date.now();
+      const waited = Math.floor((now - (sends.at(-1) ?? 0)) / 1000);
       if (waited < RESEND_COOLDOWN_SECONDS) {
         throw resendTooSoon(RESEND_COOLDOWN_SECONDS - waited);
+      }
+      const allowedAt = resendCapAllowedAt(sends);
+      if (allowedAt > now) {
+        throw resendLimitReached(Math.ceil((allowedAt - now) / 1000));
       }
       this.trackDecoy(claims.userId);
       verification = this.decoyVerification(claims.maskedEmail);
@@ -405,7 +433,7 @@ export class AuthService implements OnModuleInit {
       verification = await this.emailCodes.issue(
         { userId: user.id, client },
         user.email,
-        'skip',
+        { onCooldown: 'skip' },
       );
     } catch {
       verification = {
@@ -452,6 +480,11 @@ export class AuthService implements OnModuleInit {
       }
     }
 
+    return this.decoyChallenge(dto);
+  }
+
+  /** Desafío que nunca se puede confirmar: el correo no recibe ningún código. */
+  private decoyChallenge(dto: RegisterDto): EmailVerificationRequiredDto {
     const decoyId = randomUUID();
     this.trackDecoy(decoyId);
     const masked = maskEmail(dto.email);
@@ -481,11 +514,14 @@ export class AuthService implements OnModuleInit {
   /** Recuerda el último "envío" de un señuelo; olvida los que ya vencieron. */
   private trackDecoy(decoyId: string): void {
     const now = Date.now();
-    for (const [id, at] of this.decoySends) {
-      if (now - at > EMAIL_CHALLENGE_TTL_SECONDS * 1000)
+    for (const [id, sends] of this.decoySends) {
+      if (now - sends[sends.length - 1] > EMAIL_CHALLENGE_TTL_SECONDS * 1000)
         this.decoySends.delete(id);
     }
-    this.decoySends.set(decoyId, now);
+    this.decoySends.set(decoyId, [
+      ...(this.decoySends.get(decoyId) ?? []),
+      now,
+    ]);
   }
 
   private kdfOf(user: UserWithTwoFactor): KdfParamsResponseDto {
