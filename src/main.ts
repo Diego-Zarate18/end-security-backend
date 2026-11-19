@@ -7,13 +7,30 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters';
 import { TransformInterceptor } from './common/interceptors';
+import { Severity, syslog, syslogMiddleware } from './common/syslog/syslog';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
 
   // 0. Proxies de confianza (Railway = 1) para que req.ip y el rate limit usen la IP real
-  app.set('trust proxy', configService.get<number>('TRUST_PROXY', 0));
+  const trustProxy = configService.get<number>('TRUST_PROXY', 0);
+  app.set('trust proxy', trustProxy);
+  if (
+    configService.get<string>('NODE_ENV') === 'production' &&
+    trustProxy === 0
+  ) {
+    // No falla: solo avisa. Detrás de Railway, sin esto el límite por IP vería a todos como una sola IP
+    syslog(
+      Severity.Warning,
+      'startup',
+      {},
+      'TRUST_PROXY=0 en producción: el límite por IP no verá la IP real (detrás de Railway debe ser 1)',
+    );
+  }
+
+  // 0.05 Syslog RFC 5424 (DEC-62): antes de los límites, para registrar también sus 429
+  app.use(syslogMiddleware);
 
   // 0.1 Límite del cuerpo JSON: lotes de sincronización de la bóveda (50 x 32 KiB en base64)
   app.useBodyParser('json', { limit: '3mb' });
@@ -21,13 +38,19 @@ async function bootstrap() {
   // 1. Cabeceras HTTP de seguridad con Helmet
   app.use(helmet());
 
-  // 2. Configuración estricta de CORS
-  const corsOrigin = configService.get<string>('CORS_ORIGIN', '*');
-  app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(','),
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    credentials: true,
-  });
+  // 2. CORS estricto: la app es nativa y no lo necesita; sin orígenes, no se habilita
+  const corsOrigin = configService.get<string>('CORS_ORIGIN', '');
+  const origins = corsOrigin
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (origins.length > 0) {
+    app.enableCors({
+      origin: origins.includes('*') ? true : origins,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+      credentials: true,
+    });
+  }
 
   // 3. Prefijo global para todos los endpoints
   app.setGlobalPrefix('api');
@@ -88,8 +111,11 @@ async function bootstrap() {
 
   const port = configService.get<number>('PORT', 3000);
   await app.listen(port);
-  console.log(
-    `[EndSecurityAPI] Servidor activo en http://localhost:${port}/api`,
-  );
+  syslog(Severity.Notice, 'startup', {}, `API activa en el puerto ${port}`);
 }
-void bootstrap();
+bootstrap().catch((error: unknown) => {
+  // Falta un secreto, la BD no responde, etc.: el servicio no puede funcionar
+  syslog(Severity.Crit, 'startup', {}, 'La API no pudo arrancar');
+  console.error(error);
+  process.exit(1);
+});

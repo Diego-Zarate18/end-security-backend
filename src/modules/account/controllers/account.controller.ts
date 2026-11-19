@@ -12,10 +12,14 @@ import {
   CurrentUser,
 } from '../../../common/decorators';
 import type { AuthenticatedUser } from '../../auth/strategies';
+import { CodeSentDto } from '../../email-verification/dto';
+import { UserResponseDto } from '../../users/dto';
 import {
   ChangeMasterPasswordDto,
+  ConfirmEmailChangeDto,
   DeleteAccountDto,
   PasswordChangedDto,
+  RequestEmailChangeDto,
 } from '../dto';
 import { AccountService } from '../services';
 
@@ -32,6 +36,33 @@ export class AccountController {
     @Body() dto: ChangeMasterPasswordDto,
   ): Promise<PasswordChangedDto> {
     return this.accountService.changeMasterPassword(
+      this.actor(user, client),
+      dto,
+    );
+  }
+
+  /** Cambio de correo (DEC-63). Bajo /auth por el mismo límite estricto. */
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Post('auth/email/change')
+  requestEmailChange(
+    @CurrentUser() user: AuthenticatedUser,
+    @ClientInfo() client: ClientInfoData,
+    @Body() dto: RequestEmailChangeDto,
+  ): Promise<CodeSentDto> {
+    return this.accountService.requestEmailChange(
+      this.actor(user, client),
+      dto,
+    );
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('auth/email/change/confirm')
+  confirmEmailChange(
+    @CurrentUser() user: AuthenticatedUser,
+    @ClientInfo() client: ClientInfoData,
+    @Body() dto: ConfirmEmailChangeDto,
+  ): Promise<UserResponseDto> {
+    return this.accountService.confirmEmailChange(
       this.actor(user, client),
       dto,
     );

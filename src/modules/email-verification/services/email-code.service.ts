@@ -18,8 +18,22 @@ import { CodeSentDto } from '../dto';
 export const CODE_TTL_MINUTES = 15;
 export const MAX_ATTEMPTS = 5;
 export const RESEND_COOLDOWN_SECONDS = 60;
+/** Tope de códigos de registro por correo (cuenta), contados en la BD. */
+export const RESEND_PER_HOUR = 5;
+export const RESEND_PER_DAY = 10;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
-const PURPOSE = 'verify_email';
+/** Verificar el correo del registro, o el correo nuevo al cambiarlo (DEC-63). */
+export type EmailCodePurpose = 'verify_email' | 'change_email';
+
+export interface IssueOptions {
+  /** 'skip': dentro de los 60 s no falla, responde codeSent: false. */
+  onCooldown?: 'throw' | 'skip';
+  purpose?: EmailCodePurpose;
+  /** false: crea el código sin enviarlo (correo nuevo ya en uso, misma respuesta). */
+  deliver?: boolean;
+}
 
 export interface EmailCodeActor {
   userId: string;
@@ -47,9 +61,32 @@ export const resendTooSoon = (retryAfterSeconds: number) =>
     HttpStatus.TOO_MANY_REQUESTS,
   );
 
+export const resendLimitReached = (retryAfterSeconds: number) =>
+  new HttpException(
+    {
+      error: 'TooManyRequests',
+      message: 'Pediste demasiados códigos. Intenta de nuevo más tarde.',
+      details: { retryAfterSeconds },
+    },
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
+
+/**
+ * Momento (ms) desde el que se puede enviar otro código. `sends`: los envíos de
+ * las últimas 24 h, del más viejo al más nuevo. Devuelve 0 si no hay tope.
+ */
+export function resendCapAllowedAt(sends: number[]): number {
+  const n = sends.length;
+  return Math.max(
+    n >= RESEND_PER_HOUR ? sends[n - RESEND_PER_HOUR] + HOUR_MS : 0,
+    n >= RESEND_PER_DAY ? sends[n - RESEND_PER_DAY] + DAY_MS : 0,
+  );
+}
+
 /**
  * Códigos de verificación de correo (tabla email_verifications): 6 dígitos,
- * 15 minutos de vigencia, 5 intentos y 60 s entre envíos. En la BD solo queda
+ * 15 minutos de vigencia, 5 intentos, 60 s entre envíos y, en el registro, 5
+ * envíos por hora y 10 por día. En la BD solo queda
  * su HMAC con un pepper del servidor; un código nuevo invalida los anteriores.
  */
 @Injectable()
@@ -75,11 +112,15 @@ export class EmailCodeService {
   async issue(
     actor: EmailCodeActor,
     target: string,
-    onCooldown: 'throw' | 'skip' = 'throw',
+    {
+      onCooldown = 'throw',
+      purpose = 'verify_email',
+      deliver = true,
+    }: IssueOptions = {},
   ): Promise<CodeSentDto> {
     const now = new Date();
     const latest = await this.prisma.email_verifications.findFirst({
-      where: { user_id: actor.userId, purpose: PURPOSE },
+      where: { user_id: actor.userId, purpose },
       orderBy: { created_at: 'desc' },
       select: { created_at: true, expires_at: true },
     });
@@ -99,6 +140,25 @@ export class EmailCodeService {
       }
     }
 
+    // Tope del registro: cada envío real es una fila, así que se cuentan filas
+    if (purpose === 'verify_email') {
+      const sends = await this.prisma.email_verifications.findMany({
+        where: {
+          user_id: actor.userId,
+          purpose,
+          created_at: { gte: new Date(now.getTime() - DAY_MS) },
+        },
+        orderBy: { created_at: 'asc' },
+        select: { created_at: true },
+      });
+      const allowedAt = resendCapAllowedAt(
+        sends.map((r) => r.created_at.getTime()),
+      );
+      if (allowedAt > now.getTime()) {
+        throw resendLimitReached(Math.ceil((allowedAt - now.getTime()) / 1000));
+      }
+    }
+
     const id = randomUUID();
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
     const expiresAt = new Date(now.getTime() + CODE_TTL_MINUTES * 60_000);
@@ -107,7 +167,7 @@ export class EmailCodeService {
       this.prisma.email_verifications.updateMany({
         where: {
           user_id: actor.userId,
-          purpose: PURPOSE,
+          purpose,
           consumed_at: null,
           expires_at: { gt: now },
         },
@@ -117,7 +177,7 @@ export class EmailCodeService {
         data: {
           id,
           user_id: actor.userId,
-          purpose: PURPOSE,
+          purpose,
           target_email: target,
           code_hash: this.hash(id, code),
           attempts: 0,
@@ -127,11 +187,13 @@ export class EmailCodeService {
     ]);
 
     try {
-      await this.mailService.send({
-        to: target,
-        ...verificationCodeMail(code, CODE_TTL_MINUTES),
-        idempotencyKey: `${PURPOSE}/${id}`,
-      });
+      if (deliver) {
+        await this.mailService.send({
+          to: target,
+          ...verificationCodeMail(code, CODE_TTL_MINUTES),
+          idempotencyKey: `${purpose}/${id}`,
+        });
+      }
     } catch (error) {
       // Un código que nunca llegó no debe quedar vigente
       await this.prisma.email_verifications.update({
@@ -142,7 +204,7 @@ export class EmailCodeService {
         userId: actor.userId,
         event: AuditEvent.EmailVerifyRequest,
         outcome: 'failure',
-        metadata: { reason: 'mail_send_failed' },
+        metadata: { reason: 'mail_send_failed', purpose },
         client: actor.client,
       });
       throw error;
@@ -152,6 +214,7 @@ export class EmailCodeService {
       userId: actor.userId,
       event: AuditEvent.EmailVerifyRequest,
       outcome: 'success',
+      metadata: { purpose },
       client: actor.client,
     });
 
@@ -170,11 +233,12 @@ export class EmailCodeService {
   async check(
     actor: EmailCodeActor,
     code: string,
+    purpose: EmailCodePurpose = 'verify_email',
   ): Promise<email_verifications> {
     const entry = await this.prisma.email_verifications.findFirst({
       where: {
         user_id: actor.userId,
-        purpose: PURPOSE,
+        purpose,
         consumed_at: null,
         expires_at: { gt: new Date() },
       },
@@ -201,7 +265,7 @@ export class EmailCodeService {
         userId: actor.userId,
         event: AuditEvent.EmailVerifyConfirm,
         outcome: 'failure',
-        metadata: { attempt: entry.attempts + 1 },
+        metadata: { attempt: entry.attempts + 1, purpose },
         client: actor.client,
       });
       throw invalidEmailCode();
