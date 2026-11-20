@@ -70,3 +70,8 @@ Railway cobra por uso (servicio y base, por tiempo y recursos). Para pausar desp
 - **Migraciones:** `npx prisma migrate status` (con la `DATABASE_URL` pública) dice si falta alguna. Una migración fallida se resuelve con `npx prisma migrate resolve` solo si sabes qué pasó; ante la duda, restaura.
 - **Restaurar la base:** en el servicio PostgreSQL de Railway, **Backups** (según el plan) permite restaurar un respaldo. Sin respaldos activos no hay forma de recuperar datos: actívalos antes de usar cuentas reales.
 - **Correos que no llegan:** el dominio debe estar *Verified* en Resend; los logs del servidor muestran el fallo de envío.
+
+## Riesgos aceptados (auditoría, tarea 38)
+- **Límite de peticiones en memoria (F-02):** `express-rate-limit` guarda el contador en el proceso; es válido con una sola instancia. Si se escala a varias réplicas, hay que pasarlo a Redis.
+- **Correo en el log (F-04):** sin `RESEND_API_KEY` el correo y su código se escriben en el log; solo ocurre en desarrollo, porque en producción el arranque falla sin la clave.
+- **Dependencias (F-06):** `npm audit --omit=dev` deja `deepmerge-ts` (vía `prisma` CLI), que exige un salto mayor de Prisma; se actualiza en una tarea aparte.
